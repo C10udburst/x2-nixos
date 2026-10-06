@@ -7,7 +7,7 @@
   cfg = config.services.gateway;
   gufoCfg = config.services.gufo;
 
-  # Serialized model metadata for switcher.py
+  # Serialized model metadata for dash.py
   modelsConfig = {
     backend_port = gufoCfg.backendPort;
     default_model = gufoCfg.defaultModel;
@@ -22,14 +22,25 @@
 
   modelsJsonFile = pkgs.writeText "gufo-models.json" (builtins.toJSON modelsConfig);
   dashboardHtmlFile = ./dashboard.html;
-  switcherPyFile = ./switcher.py;
 
-  # FastCGI wrapper script executed by fcgiwrap
-  fcgiScript = pkgs.writeShellScript "gufo-fcgi-gateway" ''
+  # Python Dashboard API wrapper (rarely used, polled for stats)
+  dashScript = pkgs.writeShellScript "gufo-dash-api" ''
     export GUFO_CONFIG_PATH="${modelsJsonFile}"
-    export GUFO_DASHBOARD_HTML="${dashboardHtmlFile}"
     export SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
-    exec ${pkgs.python3}/bin/python3 ${switcherPyFile} "$@"
+    exec ${pkgs.python3}/bin/python3 ${./dash.py} "$@"
+  '';
+
+  # Ultra-fast Bash + jq Switcher wrapper (hot path for /v1/* inference requests)
+  switcherScript = pkgs.writeShellScript "gufo-v1-switcher" ''
+    export PATH="${lib.makeBinPath [
+      pkgs.jq
+      pkgs.curl
+      pkgs.gnused
+      pkgs.coreutils
+      pkgs.systemd
+    ]}:$PATH"
+    export GUFO_BACKEND_PORT="${toString gufoCfg.backendPort}"
+    exec ${./switcher.sh} "$@"
   '';
 in {
   options.services.gateway = {
@@ -64,7 +75,7 @@ in {
       }
     ];
 
-    # Ultra-minimal fcgiwrap instance (~1MB memory, exits on idle)
+    # Ultra-minimal fcgiwrap instance (~1MB memory)
     services.fcgiwrap.instances.gufo = {
       process.user = "gufo";
       process.group = "gufo";
@@ -92,6 +103,7 @@ in {
           }
         ];
 
+        # 1. Static dashboard HTML (wire speed)
         locations."= /" = {
           alias = "${dashboardHtmlFile}";
           extraConfig = ''
@@ -106,11 +118,23 @@ in {
           '';
         };
 
-        locations."/" = {
+        # 2. Python Dashboard API (/api/*)
+        locations."/api/" = {
           extraConfig = ''
             fastcgi_pass unix:/run/fcgiwrap-gufo.sock;
             include ${pkgs.nginx}/conf/fastcgi_params;
-            fastcgi_param SCRIPT_FILENAME ${fcgiScript};
+            fastcgi_param SCRIPT_FILENAME ${dashScript};
+            fastcgi_buffering off;
+            fastcgi_read_timeout 60s;
+          '';
+        };
+
+        # 3. Ultra-fast Bash + jq Model Switcher (/v1/* inference hot path)
+        locations."/v1/" = {
+          extraConfig = ''
+            fastcgi_pass unix:/run/fcgiwrap-gufo.sock;
+            include ${pkgs.nginx}/conf/fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME ${switcherScript};
             fastcgi_buffering off;
             fastcgi_read_timeout 600s;
             fastcgi_send_timeout 600s;

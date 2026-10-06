@@ -97,9 +97,10 @@ Target Hardware: **GMKtec EVO-X2 Mini PC**
 ├── models.nix                 # Declarative model definitions
 └── modules/
     ├── gufo.nix               # Single responsibility: Gufo package & systemd services
-    ├── gateway.nix            # Single responsibility: FastCGI switcher & Nginx front
-    ├── switcher.py            # FastCGI model switcher & reverse proxy script
-    ├── dashboard.html         # Client-side rendered live dashboard
+    ├── gateway.nix            # Single responsibility: FastCGI routing & Nginx front
+    ├── switcher.sh            # Ultra-fast Bash + jq model switcher & reverse proxy (/v1/*)
+    ├── dash.py                # Python dashboard management & status API (/api/*)
+    ├── dashboard.html         # Client-side rendered live dashboard (/)
     ├── minimal.nix            # RAM minimization, sysctl, journald tuning, CLI tools
     ├── openssh.nix            # Hardened OpenSSH daemon
     └── tailscale.nix          # Tailscale mesh VPN
