@@ -34,11 +34,11 @@ Target Hardware: **GMKtec EVO-X2 Mini PC**
                    └─────────────────────┬─────────────────────┘
                                          │ Reverse Proxy (127.0.0.1:8081)
                    ┌─────────────────────▼─────────────────────┐
-                   │   Gufo Container (Active Model Service)   │
-                   │   podman run (ROCm /dev/kfd, /dev/dri)    │
+                   │    Gufo Native Binary (Host Process)      │
+                   │    ROCm gfx1151 /dev/kfd, /dev/dri        │
                    │                                           │
-                   │   [gufo-qwen3.8-flash-next.service]       │
-                   │   (Only ONE model in VRAM at a time)      │
+                   │    [gufo-qwen3.8-flash-next.service]      │
+                   │    (Only ONE model in VRAM at a time)     │
                    └───────────────────────────────────────────┘
 ```
 
@@ -58,14 +58,16 @@ Target Hardware: **GMKtec EVO-X2 Mini PC**
    - `vm.max_map_count = 2147483642`: Permits memory-mapping massive multi-shard 70B+ GGUF files.
    - `vm.swappiness = 10` & `LimitMEMLOCK = infinity`: Locks model weights directly into physical memory.
 
-3. **Gufo Inference Engine**:
-   - Runs `ghcr.io/gufo-org/toolboxes/gufo-runtime:latest` via Podman with native `/dev/kfd` and `/dev/dri` access.
-   - Auto-resolves multi-part shards (`model-00001-of-00004.gguf`) or directory structures.
-   - Supports MTP (Multi-Token Prediction) speculative decoding and multimodal vision projectors (`mmproj`).
+3. **Native Gufo Inference Engine (Flake-Based, No Podman)**:
+   - Uses native `gufo` package from `github:gufo-org/gufo` flake with ROCm gfx1151 support for AMD Strix Halo.
+   - Direct host execution with `/dev/kfd` and `/dev/dri` access: zero container virtualization overhead.
+   - Auto-resolves multi-part shards (`*.gguf`) or directory structures.
+   - Supports MTP (Multi-Token Prediction) speculative decoding and multimodal vision projectors (`--mmproj`).
 
-4. **Modular Systemd Model Services**:
-   - Each model is declared in `models.nix` and automatically compiled into a dedicated systemd service (`gufo-<model>.service`).
-   - Native systemd `conflicts` ensures that starting one model immediately and cleanly unloads any previously running model from memory.
+4. **Modular Single-Responsibility Architecture**:
+   - `modules/gufo.nix`: Purely responsible for native Gufo engine package and systemd model services.
+   - `modules/gateway.nix`: Purely responsible for the FastCGI model switcher, Nginx reverse proxy, and client-side dashboard.
+   - `models.nix`: Purely declarative model catalog. Adding a new model requires only adding an attribute.
 
 5. **FastCGI Switcher Wrapper**:
    - Listens on port `8080` (public / Tailscale).
@@ -89,12 +91,13 @@ Target Hardware: **GMKtec EVO-X2 Mini PC**
 
 ```
 .
-├── flake.nix                  # Flake entrypoint (evo-x2 configuration)
+├── flake.nix                  # Flake entrypoint (evo-x2 configuration, gufo input)
 ├── configuration.nix          # Base host configuration
 ├── hardware-configuration.nix # Bootloader, disks, and AMD APU hardware settings
 ├── models.nix                 # Declarative model definitions
 └── modules/
-    ├── gufo.nix               # Modular Gufo systemd services + FastCGI & Nginx
+    ├── gufo.nix               # Single responsibility: Gufo package & systemd services
+    ├── gateway.nix            # Single responsibility: FastCGI switcher & Nginx front
     ├── switcher.py            # FastCGI model switcher & reverse proxy script
     ├── dashboard.html         # Client-side rendered live dashboard
     ├── minimal.nix            # RAM minimization, sysctl, journald tuning, CLI tools

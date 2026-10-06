@@ -3,16 +3,22 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    gufo = {
+      url = "github:gufo-org/gufo";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = {
     self,
     nixpkgs,
+    gufo,
     ...
-  }: {
+  } @ inputs: {
     nixosConfigurations = {
       evo-x2 = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
+        specialArgs = {inherit inputs;};
         modules = [
           ./configuration.nix
         ];

@@ -9,6 +9,7 @@
     ./hardware-configuration.nix
     ./modules/minimal.nix
     ./modules/gufo.nix
+    ./modules/gateway.nix
     ./modules/openssh.nix
     ./modules/tailscale.nix
     ./models.nix

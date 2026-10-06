@@ -2,7 +2,6 @@
   services.gufo = {
     enable = true;
     modelsDir = "/srv/models";
-    port = 8080;
     defaultModel = "qwen3.8-flash-next";
 
     models = {
