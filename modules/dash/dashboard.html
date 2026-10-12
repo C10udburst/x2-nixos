@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>EVO-X2 • AI Inference Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@latest/dist/full.min.css" rel="stylesheet" type="text/css"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-base-300 min-h-screen text-base-content p-4 md:p-8">
+  <div class="max-w-6xl mx-auto space-y-6">
+
+    <!-- Header -->
+    <header class="navbar bg-base-200 rounded-box shadow flex-wrap justify-between p-4 gap-4">
+      <div>
+        <h1 class="text-xl md:text-2xl font-bold flex items-center gap-2">
+          <span>GMKtec EVO-X2</span>
+          <span class="badge badge-neutral font-mono text-xs">Ryzen AI Max+ 395</span>
+        </h1>
+        <p class="text-xs text-base-content/60 mt-1">128GB Unified LPDDR5X • RDNA 3.5 APU • NixOS</p>
+      </div>
+      <div id="status-badge" class="badge badge-success gap-2 py-3 px-4 font-semibold text-xs">
+        <span class="w-2 h-2 rounded-full bg-success animate-ping"></span>
+        <span id="gateway-status">LIVE MONITORING</span>
+      </div>
+    </header>
+
+    <!-- System Telemetry Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- RAM Metric -->
+      <div class="card bg-base-200 shadow border border-base-100">
+        <div class="card-body p-5">
+          <div class="flex justify-between items-center text-xs text-base-content/60 uppercase font-semibold">
+            <span>Unified RAM (128GB)</span>
+            <span id="ram-pct" class="badge badge-sm badge-ghost font-mono">0%</span>
+          </div>
+          <div class="text-2xl font-bold font-mono mt-1" id="ram-used">-- GB</div>
+          <p class="text-xs text-base-content/60" id="ram-sub">Available: -- GB</p>
+          <progress id="ram-bar" class="progress progress-success w-full mt-2" value="0" max="100"></progress>
+        </div>
+      </div>
+
+      <!-- VRAM / GTT Metric -->
+      <div class="card bg-base-200 shadow border border-base-100">
+        <div class="card-body p-5">
+          <div class="flex justify-between items-center text-xs text-base-content/60 uppercase font-semibold">
+            <span>VRAM & GTT Alloc</span>
+            <span id="vram-pct" class="badge badge-sm badge-ghost font-mono">0%</span>
+          </div>
+          <div class="text-2xl font-bold font-mono mt-1" id="vram-val">-- GB</div>
+          <p class="text-xs text-base-content/60 truncate" id="vram-sub">Dynamic allocation</p>
+          <progress id="vram-bar" class="progress progress-secondary w-full mt-2" value="0" max="100"></progress>
+        </div>
+      </div>
+
+      <!-- GPU Activity -->
+      <div class="card bg-base-200 shadow border border-base-100">
+        <div class="card-body p-5">
+          <div class="flex justify-between items-center text-xs text-base-content/60 uppercase font-semibold">
+            <span>GPU Engine Load</span>
+            <span class="badge badge-sm badge-info font-mono">RDNA 3.5</span>
+          </div>
+          <div class="text-2xl font-bold font-mono mt-1" id="gpu-busy">0%</div>
+          <p class="text-xs text-base-content/60 truncate" id="gpu-device">AMD Radeon Graphics</p>
+          <progress id="gpu-bar" class="progress progress-info w-full mt-2" value="0" max="100"></progress>
+        </div>
+      </div>
+
+      <!-- CPU Load -->
+      <div class="card bg-base-200 shadow border border-base-100">
+        <div class="card-body p-5">
+          <div class="flex justify-between items-center text-xs text-base-content/60 uppercase font-semibold">
+            <span>CPU Load</span>
+            <span class="badge badge-sm badge-ghost font-mono">16c / 32t Zen 5</span>
+          </div>
+          <div class="text-2xl font-bold font-mono mt-1" id="cpu-load">0.00</div>
+          <p class="text-xs text-base-content/60 truncate" id="cpu-sub">1m: 0.00 | 5m: 0.00</p>
+          <progress id="cpu-bar" class="progress progress-warning w-full mt-2" value="0" max="100"></progress>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Workload Banner -->
+    <div class="card bg-base-200 border-l-4 border-primary shadow p-5">
+      <div class="flex flex-wrap justify-between items-center gap-4">
+        <div>
+          <span class="text-xs font-semibold uppercase text-base-content/60">Current Active Workload (Single Workload in VRAM)</span>
+          <div class="text-xl font-bold font-mono text-primary mt-1" id="active-title">None (Idle)</div>
+          <p class="text-xs text-base-content/60 mt-1" id="active-desc">Ready to launch model or Immich ML on request.</p>
+        </div>
+        <button id="btn-unload" class="btn btn-error btn-outline btn-sm" onclick="unloadActive()" disabled>
+          Unload Workload
+        </button>
+      </div>
+    </div>
+
+    <!-- Models Section -->
+    <div class="space-y-3">
+      <div class="flex justify-between items-end">
+        <h2 class="text-lg font-bold">Configured Models</h2>
+        <span class="text-xs text-base-content/60">Automatic hot-swap on inference request</span>
+      </div>
+      <div id="models-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="card bg-base-200 p-6 text-center text-base-content/60">Loading model registry...</div>
+      </div>
+    </div>
+
+    <!-- Inference Playground -->
+    <div class="card bg-base-200 shadow space-y-4 p-5">
+      <div class="flex justify-between items-center">
+        <h2 class="text-lg font-bold">Interactive Inference Playground</h2>
+        <span class="text-xs text-base-content/60">Target: <code id="playground-target" class="text-primary font-bold">auto</code></span>
+      </div>
+      <textarea id="prompt-input" class="textarea textarea-bordered w-full h-24 text-sm" placeholder="Ask anything to test SSE streaming inference...">Explain how unified memory on AMD Ryzen AI Max+ 395 eliminates PCIe bandwidth bottlenecks.</textarea>
+      <div class="flex justify-end gap-2">
+        <button class="btn btn-ghost btn-sm" onclick="clearPlayground()">Clear</button>
+        <button id="btn-send" class="btn btn-primary btn-sm" onclick="sendInference()">Generate Stream</button>
+      </div>
+      <div id="stream-output" class="bg-base-300 p-4 rounded-box font-mono text-xs text-info min-h-[80px] max-h-96 overflow-y-auto whitespace-pre-wrap">Output will stream here...</div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="text-center text-xs text-base-content/40 py-4 border-t border-base-200">
+      GMKtec EVO-X2 • OpenAI Compatible Gateway (:8080) • Immich ML Socket (:3003)
+    </footer>
+
+  </div>
+
+  <script>
+    let state = { active: null, models: [], switching: false };
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status', { cache: 'no-store' });
+        if (!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        updateUI(data);
+      } catch (err) {
+        document.getElementById('gateway-status').textContent = 'OFFLINE';
+        document.getElementById('status-badge').className = 'badge badge-error gap-2 py-3 px-4 font-semibold text-xs';
+      }
+    }
+
+    function updateUI(data) {
+      document.getElementById('gateway-status').textContent = 'LIVE MONITORING';
+      document.getElementById('status-badge').className = 'badge badge-success gap-2 py-3 px-4 font-semibold text-xs';
+
+      if (data.memory) {
+        const used = (data.memory.used_mb / 1024).toFixed(1);
+        const total = (data.memory.total_mb / 1024).toFixed(1);
+        const avail = (data.memory.available_mb / 1024).toFixed(1);
+        document.getElementById('ram-used').textContent = `${used} / ${total} GB`;
+        document.getElementById('ram-sub').textContent = `Available: ${avail} GB`;
+        document.getElementById('ram-pct').textContent = `${data.memory.percent_used}%`;
+        document.getElementById('ram-bar').value = data.memory.percent_used;
+      }
+
+      if (data.gpu) {
+        const vramUsed = (data.gpu.vram_used_mb / 1024).toFixed(1);
+        const vramTot = (data.gpu.vram_total_mb / 1024).toFixed(1);
+        const gttUsed = (data.gpu.gtt_used_mb / 1024).toFixed(1);
+        if (data.gpu.vram_total_mb > 0) {
+          const pct = Math.round((data.gpu.vram_used_mb / data.gpu.vram_total_mb) * 100);
+          document.getElementById('vram-val').textContent = `${vramUsed} GB`;
+          document.getElementById('vram-sub').textContent = `VRAM: ${vramUsed}/${vramTot} GB | GTT: ${gttUsed} GB`;
+          document.getElementById('vram-pct').textContent = `${pct}%`;
+          document.getElementById('vram-bar').value = pct;
+        } else {
+          document.getElementById('vram-val').textContent = `${gttUsed} GB`;
+          document.getElementById('vram-sub').textContent = `Dynamic unified GTT allocation`;
+          document.getElementById('vram-pct').textContent = 'Auto';
+          document.getElementById('vram-bar').value = 15;
+        }
+        document.getElementById('gpu-busy').textContent = `${data.gpu.busy_percent || 0}%`;
+        document.getElementById('gpu-bar').value = data.gpu.busy_percent || 0;
+        if (data.gpu.device) document.getElementById('gpu-device').textContent = data.gpu.device;
+      }
+
+      if (data.load_avg) {
+        document.getElementById('cpu-load').textContent = data.load_avg[0].toFixed(2);
+        document.getElementById('cpu-sub').textContent = `1m: ${data.load_avg[0]} | 5m: ${data.load_avg[1]} | 15m: ${data.load_avg[2]}`;
+        document.getElementById('cpu-bar').value = Math.min(100, Math.round((data.load_avg[0] / 16) * 100));
+      }
+
+      state.active = data.active_model;
+      state.models = data.models || [];
+
+      const titleEl = document.getElementById('active-title');
+      const descEl = document.getElementById('active-desc');
+      const unloadBtn = document.getElementById('btn-unload');
+      const targetLbl = document.getElementById('playground-target');
+
+      if (state.active === 'immich-machine-learning') {
+        titleEl.textContent = 'Immich Machine Learning';
+        titleEl.className = 'text-xl font-bold font-mono text-warning mt-1';
+        descEl.textContent = 'Active photo inference engine on port 3004 (socket activated).';
+        unloadBtn.disabled = state.switching;
+        targetLbl.textContent = state.models[0]?.name || 'none';
+      } else if (state.active) {
+        titleEl.textContent = state.active;
+        titleEl.className = 'text-xl font-bold font-mono text-success mt-1';
+        const m = state.models.find(x => x.name === state.active);
+        descEl.textContent = m ? (m.description || `Alias: ${m.alias}`) : 'Serving requests.';
+        unloadBtn.disabled = state.switching;
+        targetLbl.textContent = state.active;
+      } else {
+        titleEl.textContent = 'None (0 GB VRAM Allocated)';
+        titleEl.className = 'text-xl font-bold font-mono text-base-content/40 mt-1';
+        descEl.textContent = 'Idle. Ready to launch workload immediately upon request.';
+        unloadBtn.disabled = true;
+        targetLbl.textContent = state.models[0]?.name || 'none';
+      }
+
+      renderModels();
+    }
+
+    function renderModels() {
+      const container = document.getElementById('models-list');
+      if (!state.models || state.models.length === 0) {
+        container.innerHTML = `<div class="card bg-base-200 p-6 text-center text-base-content/60">No models found in registry.</div>`;
+        return;
+      }
+
+      container.innerHTML = state.models.map(m => {
+        const isActive = (m.name === state.active);
+        return `
+          <div class="card bg-base-200 shadow border ${isActive ? 'border-success' : 'border-base-100'} p-5 flex flex-col justify-between">
+            <div class="space-y-2">
+              <div class="flex justify-between items-start gap-2">
+                <span class="font-bold font-mono text-sm break-all">${m.name}</span>
+                ${isActive ? '<span class="badge badge-success badge-sm font-semibold">ACTIVE</span>' : ''}
+              </div>
+              <p class="text-xs text-base-content/70 line-clamp-2">${m.description || 'No description'}</p>
+              <div class="flex flex-wrap gap-1">
+                <span class="badge badge-outline badge-xs uppercase font-mono">${m.backend_type || 'custom'}</span>
+                <span class="badge badge-ghost badge-xs font-mono">alias: ${m.alias}</span>
+              </div>
+            </div>
+            <div class="mt-4">
+              <button class="btn ${isActive ? 'btn-success btn-outline' : 'btn-primary'} btn-sm w-full"
+                onclick="switchModel('${m.name}')"
+                ${isActive || state.switching ? 'disabled' : ''}>
+                ${isActive ? '✓ Loaded in VRAM' : (state.switching ? 'Switching...' : 'Switch Model')}
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function switchModel(name) {
+      if (state.switching) return;
+      state.switching = true;
+      document.getElementById('active-title').textContent = `Loading ${name}...`;
+      renderModels();
+      try {
+        const res = await fetch('/api/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: name })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert('Switch failed: ' + (err.error || res.statusText));
+        }
+      } catch (e) {
+        alert('Network error: ' + e.message);
+      } finally {
+        state.switching = false;
+        fetchStatus();
+      }
+    }
+
+    async function unloadActive() {
+      if (!confirm('Unload workload and release memory?')) return;
+      state.switching = true;
+      try {
+        await fetch('/api/stop', { method: 'POST' });
+      } finally {
+        state.switching = false;
+        fetchStatus();
+      }
+    }
+
+    function clearPlayground() {
+      document.getElementById('stream-output').textContent = '';
+    }
+
+    async function sendInference() {
+      const prompt = document.getElementById('prompt-input').value.trim();
+      if (!prompt) return;
+
+      const out = document.getElementById('stream-output');
+      const btn = document.getElementById('btn-send');
+      btn.disabled = true;
+      out.textContent = '';
+
+      const target = (state.active && state.active !== 'immich-machine-learning')
+        ? state.active
+        : (state.models[0]?.name || 'qwen3.8-flash-next');
+
+      try {
+        const res = await fetch('/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: target,
+            messages: [{ role: 'user', content: prompt }],
+            stream: true,
+            max_tokens: 512
+          })
+        });
+
+        if (!res.ok) {
+          out.textContent = `Error (${res.status}): ${await res.text()}`;
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            const clean = line.trim();
+            if (clean.startsWith('data: ')) {
+              const str = clean.substring(6).trim();
+              if (str === '[DONE]') break;
+              try {
+                const json = JSON.parse(str);
+                out.textContent += json.choices?.[0]?.delta?.content || '';
+                out.scrollTop = out.scrollHeight;
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (err) {
+        out.textContent += `\n[Error: ${err.message}]`;
+      } finally {
+        btn.disabled = false;
+        fetchStatus();
+      }
+    }
+
+    fetchStatus();
+    setInterval(fetchStatus, 2500);
+  </script>
+</body>
+</html>

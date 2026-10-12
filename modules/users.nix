@@ -17,11 +17,37 @@
   # Open standard SSH port
   networking.firewall.allowedTCPPorts = [ 22 ];
 
+  users.users.claude-code = {
+    isNormalUser = true;
+    description = "claude-code";
+    extraGroups = [
+      "nixconfig"
+      "video"
+      "render"
+      "networkmanager"
+    ];
+    openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF+3Fo6wnn+MCd411dP8dUcJ6G7Y3xRU7RMUy3h/ZNvi claude-code@amadeusz->llm-x2"
+    ];
+  };
+
+  users.users.miecz = {
+    isNormalUser = true;
+    description = "miecz";
+    extraGroups = [
+      "nixconfig"
+      "wheel"
+      "video"
+      "render"
+      "networkmanager"
+    ];
+  };
 
   users.users.cloudburst = {
     isNormalUser = true;
     description = "cloudburst";
     extraGroups = [
+      "nixconfig"
       "wheel"
       "video"
       "render"

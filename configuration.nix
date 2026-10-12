@@ -7,12 +7,12 @@
 {
   imports = [
     ./hardware-configuration.nix
+    ./modules/dash
     ./modules/minimal.nix
-    ./modules/gufo.nix
-    ./modules/gateway.nix
-    ./modules/openssh.nix
+    ./modules/models.nix
+    ./modules/pkgs.nix
     ./modules/tailscale.nix
-    ./models.nix
+    ./modules/users.nix
   ];
 
   networking.hostName = "evo-x2";

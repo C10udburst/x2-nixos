@@ -3,7 +3,8 @@
   lib,
   pkgs,
   ...
-}: {
+}:
+{
   # 1. Headless Bare-Minimal Target
   systemd.defaultUnit = "multi-user.target";
 
@@ -91,19 +92,12 @@
     }
   ];
 
-  # 4. Usage Inspection and Hardware Diagnostic Tools
-  environment.systemPackages = with pkgs; [
-    # GPU / APU diagnostics
-    nvtopPackages.amd # Real-time GPU & VRAM curses monitor
-    rocmPackages.rocm-smi # ROCm SMI tool
-    amdgpu_top # Specialized RDNA 3.5 AMDGPU top monitor
-
-    # System inspection
-    btop
-    htop
-    pciutils
-    usbutils
-    curl
-    jq
+  # 4. Swapfile (16GB headroom)
+  swapDevices = [
+    {
+      device = "/var/lib/swapfile";
+      size = 16 * 1024; # 16384 MB (16 GB)
+    }
   ];
+
 }
