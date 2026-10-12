@@ -17,6 +17,8 @@
   # Open standard SSH port
   networking.firewall.allowedTCPPorts = [ 22 ];
 
+  users.groups.nixconfig = { };
+
   users.users.claude-code = {
     isNormalUser = true;
     description = "claude-code";

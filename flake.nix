@@ -7,12 +7,17 @@
       url = "github:gufo-org/gufo";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = {
     self,
     nixpkgs,
     gufo,
+    disko,
     ...
   } @ inputs: {
     nixosConfigurations = {
@@ -20,6 +25,8 @@
         system = "x86_64-linux";
         specialArgs = {inherit inputs;};
         modules = [
+          disko.nixosModules.disko
+          ./disko.nix
           ./configuration.nix
         ];
       };

@@ -26,23 +26,36 @@
   boot.kernelModules = ["kvm-amd"];
   boot.extraModulePackages = [];
 
-  # Default filesystem mounts (can be adjusted to match host disk labels / UUIDs)
+  # Filesystem mounts matching disko configuration (/dev/nvme0n1)
   fileSystems."/" = {
-    device = lib.mkDefault "/dev/disk/by-label/nixos";
-    fsType = lib.mkDefault "ext4";
+    device = lib.mkDefault "/dev/disk/by-partlabel/disk-main-root";
+    fsType = "btrfs";
+    options = [ "subvol=@" "compress=zstd" "ssd" "noatime" ];
+  };
+
+  fileSystems."/nix" = {
+    device = lib.mkDefault "/dev/disk/by-partlabel/disk-main-root";
+    fsType = "btrfs";
+    options = [ "subvol=@nix" "compress=zstd" "ssd" "noatime" ];
+  };
+
+  fileSystems."/home" = {
+    device = lib.mkDefault "/dev/disk/by-partlabel/disk-main-root";
+    fsType = "btrfs";
+    options = [ "subvol=@home" "compress=zstd" "ssd" "noatime" ];
+  };
+
+  fileSystems."/srv" = {
+    device = lib.mkDefault "/dev/disk/by-partlabel/disk-main-root";
+    fsType = "btrfs";
+    options = [ "subvol=@srv" "compress=none" "ssd" "noatime" ];
   };
 
   fileSystems."/boot" = {
-    device = lib.mkDefault "/dev/disk/by-label/boot";
+    device = lib.mkDefault "/dev/disk/by-partlabel/disk-main-ESP";
     fsType = "vfat";
-    options = ["fmask=0077" "dmask=0077"];
+    options = [ "fmask=0077" "dmask=0077" ];
   };
-
-  # Optional dedicated NVMe storage for large models (/srv/models)
-  # fileSystems."/srv/models" = {
-  #   device = "/dev/disk/by-label/models";
-  #   fsType = "ext4";
-  # };
 
   swapDevices = [];
 
