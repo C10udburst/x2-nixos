@@ -7,15 +7,13 @@
 }: let
   mkGufo = import ./gufo/mkGufo.nix {inherit pkgs lib config inputs;};
   mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix {inherit pkgs lib config;};
-
-  allModelUnits = lib.mapAttrsToList (_: m: m.serviceName) config.services.models;
-  immichUnit = "immich-machine-learning.service";
-  allExclusiveUnits = allModelUnits ++ [immichUnit];
 in {
   imports = [
+    ./workload-manager.nix
     ./gufo
     ./llama-cpp
     ./immich
+    ./comfyui
   ];
 
   options.services = {
@@ -63,24 +61,17 @@ in {
       inherit mkGufo mkLlamaCpp;
     };
 
-    # Instantiate model systemd services with mutual Conflicts (Rule 1: single model in VRAM)
+    # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
     systemd.services =
-      (lib.mapAttrs' (_: m: let
+      lib.mapAttrs' (_: m: let
         unitAttr = lib.removeSuffix ".service" m.serviceName;
-        otherUnits = lib.filter (u: u != m.serviceName) allExclusiveUnits;
+        otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
       in
         lib.nameValuePair unitAttr (m.systemdService // {
           conflicts = (m.systemdService.conflicts or []) ++ otherUnits;
           wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
         })
-      ) config.services.models)
-      // (
-        lib.optionalAttrs (config.services ? immich-ml && config.services.immich-ml.enable) {
-          immich-machine-learning = {
-            conflicts = allModelUnits;
-          };
-        }
-      );
+      ) config.services.models;
 
     # Global models map definition
     services.models = {

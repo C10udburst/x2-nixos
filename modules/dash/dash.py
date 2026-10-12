@@ -4,8 +4,8 @@ Dashboard status and management API for GMKtec EVO-X2.
 GMKtec EVO-X2 (AMD Ryzen AI Max+ 395 128GB Unified Memory).
 
 Provides:
-- /api/status: System RAM, GPU VRAM & GTT allocations, CPU load, and model registry list
-- /api/switch: Manually switch active model
+- /api/status: System RAM, GPU VRAM & GTT allocations, CPU load, defined services & model registry
+- /api/switch: Manually switch active LLM model
 - /api/stop: Stop active model or workload to free GPU memory
 """
 
@@ -20,7 +20,7 @@ import time
 from urllib.parse import parse_qs, urlparse
 
 CONFIG_PATH = os.environ.get("MODELS_CONFIG_PATH", os.environ.get("GUFO_CONFIG_PATH", "/etc/models.json"))
-CONFIG = {"models": {}, "default_model": None}
+CONFIG = {"models": {}, "default_model": None, "services": [], "all_exclusive_units": []}
 
 if os.path.exists(CONFIG_PATH):
     try:
@@ -30,6 +30,8 @@ if os.path.exists(CONFIG_PATH):
         sys.stderr.write(f"Failed to load config: {e}\n")
 
 MODELS = CONFIG.get("models", {})
+SERVICES = CONFIG.get("services", [])
+ALL_EXCLUSIVE_UNITS = CONFIG.get("all_exclusive_units", [])
 SYSTEMCTL = os.environ.get("SYSTEMCTL", "systemctl")
 LOCK_FILE = CONFIG.get("lock_file", "/run/model-lock/model.lock")
 STATE_FILE = CONFIG.get("state_file", "/run/model-lock/active_model")
@@ -71,10 +73,13 @@ def get_active_workload():
         except Exception:
             pass
 
-    # 2. Check if Immich ML is active
-    ok, out, _ = run_systemctl("is-active", "immich-machine-learning.service")
-    if ok and out == "active":
-        return "immich-machine-learning"
+    # 2. Check standalone / on-demand registered services
+    for svc in SERVICES:
+        unit = svc.get("unit")
+        if unit:
+            ok, out, _ = run_systemctl("is-active", unit)
+            if ok and out == "active":
+                return svc.get("id")
 
     # 3. Check registered models
     for name, mcfg in MODELS.items():
@@ -171,6 +176,41 @@ def handle_status():
     active = get_active_workload()
     stats = get_system_stats()
 
+    # Query status of defined subsystems and services
+    services_status = []
+    for s in SERVICES:
+        unit = s.get("unit")
+        socket_unit = s.get("socket_unit")
+
+        is_unit_active = False
+        if unit:
+            ok, out, _ = run_systemctl("is-active", unit)
+            is_unit_active = (ok and out == "active")
+
+        is_socket_active = False
+        if socket_unit:
+            ok, out, _ = run_systemctl("is-active", socket_unit)
+            is_socket_active = (ok and out == "active")
+
+        if is_unit_active:
+            status = "active"
+        elif is_socket_active:
+            status = "standby"
+        elif s.get("type") == "gateway":
+            status = "active"
+        else:
+            status = "inactive"
+
+        services_status.append({
+            "id": s.get("id"),
+            "name": s.get("name"),
+            "port": s.get("port"),
+            "backend_port": s.get("backend_port"),
+            "type": s.get("type"),
+            "status": status,
+            "description": s.get("description", ""),
+        })
+
     model_list = []
     for name, mcfg in MODELS.items():
         model_list.append({
@@ -184,7 +224,8 @@ def handle_status():
     payload = {
         "status": "ok",
         "active_model": active,
-        "immich_active": (active == "immich-machine-learning"),
+        "active_workload": active,
+        "services": services_status,
         "models": model_list,
         **stats,
     }
@@ -232,14 +273,16 @@ def handle_switch(body):
     with open(LOCK_FILE, "w") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            # Stop Immich ML if it is running
-            run_systemctl("stop", "immich-machine-learning.service")
-
             mcfg = MODELS[target]
-            unit = mcfg.get("service_name", f"model-{target}.service")
+            target_unit = mcfg.get("service_name", f"model-{target}.service")
             target_url = mcfg.get("url", "http://127.0.0.1:8081")
 
-            ok, out, err = run_systemctl("start", unit)
+            # Stop all other exclusive heavy workloads calculated at eval time
+            for unit in ALL_EXCLUSIVE_UNITS:
+                if unit != target_unit:
+                    run_systemctl("stop", unit)
+
+            ok, out, err = run_systemctl("start", target_unit)
             if not ok:
                 send_headers(status="500 Internal Server Error")
                 sys.stdout.buffer.write(json.dumps({"error": err or out}).encode("utf-8"))
@@ -271,19 +314,9 @@ def handle_stop():
     with open(LOCK_FILE, "w") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            active = get_active_workload()
-            if active == "immich-machine-learning":
-                run_systemctl("stop", "immich-machine-learning.service")
-            elif active and active in MODELS:
-                unit = MODELS[active].get("service_name", f"model-{active}.service")
+            # Stop all exclusive heavy workloads calculated at eval time
+            for unit in ALL_EXCLUSIVE_UNITS:
                 run_systemctl("stop", unit)
-            else:
-                # Stop all model services
-                for mcfg in MODELS.values():
-                    unit = mcfg.get("service_name")
-                    if unit:
-                        run_systemctl("stop", unit)
-                run_systemctl("stop", "immich-machine-learning.service")
 
             if os.path.exists(STATE_FILE):
                 try:

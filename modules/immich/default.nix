@@ -5,55 +5,17 @@
   ...
 }: let
   cfg = config.services.immich-ml;
+  mkWakeScript = import ../on-demand/mkWakeScript.nix {inherit pkgs lib;};
 
-  wakeNetcatScript = pkgs.writeShellScript "immich-wake-netcat" ''
-    set -euo pipefail
-
-    LOCK_FILE="/run/model-lock/model.lock"
-    STATE_FILE="/run/model-lock/active_model"
-    BACKEND_PORT="${toString cfg.backendPort}"
-
-    # 1. Acquire independent model lock
-    exec 9>"$LOCK_FILE"
-    flock -x 9
-
-    # 2. Check if immich-machine-learning is already the active workload
-    ACTIVE=$(cat "$STATE_FILE" 2>/dev/null || true)
-    if [ "$ACTIVE" != "immich-machine-learning" ]; then
-      # Stop any currently active LLM services (gufo or llama-cpp)
-      for u in $(systemctl list-units --type=service --state=running --no-legend "gufo-*" "llama-cpp-*" 2>/dev/null | awk '{print $1}'); do
-        sudo -n systemctl stop "$u" 2>/dev/null || true
-      done
-
-      # Start Immich Machine Learning backend service
-      sudo -n systemctl start immich-machine-learning.service
-
-      # Wait for Immich ML backend to become responsive
-      DEADLINE=$(( $(date +%s) + 60 ))
-      READY=0
-      while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-        if ${pkgs.curl}/bin/curl -s -f "http://127.0.0.1:''${BACKEND_PORT}/ping" >/dev/null 2>&1; then
-          READY=1
-          echo "immich-machine-learning" > "$STATE_FILE"
-          break
-        fi
-        sleep 0.2
-      done
-
-      if [ "$READY" -eq 0 ]; then
-        flock -u 9
-        printf "HTTP/1.1 504 Gateway Timeout\r\n"
-        printf "Content-Type: text/plain\r\n"
-        printf "Connection: close\r\n\r\n"
-        printf "Immich Machine Learning backend startup timed out\n"
-        exit 0
-      fi
-    fi
-    flock -u 9
-
-    # 3. Transparently forward incoming connection to Immich ML backend using netcat
-    exec ${pkgs.netcat-openbsd}/bin/nc 127.0.0.1 "$BACKEND_PORT"
-  '';
+  wakeNetcatScript = mkWakeScript {
+    workloadId = "immich-machine-learning";
+    serviceName = "immich-machine-learning.service";
+    backendPort = cfg.backendPort;
+    healthCheckCmd = "${pkgs.curl}/bin/curl -s -f http://127.0.0.1:${toString cfg.backendPort}/ping >/dev/null 2>&1";
+    timeoutSec = 60;
+    description = "Immich Machine Learning backend";
+    stopScript = config.services.workload-manager.stopScript;
+  };
 in {
   options.services.immich-ml = {
     enable = lib.mkEnableOption "Immich Machine Learning server with dynamic model unloading" // {
@@ -109,27 +71,9 @@ in {
     };
     users.groups.immich-ml = {};
 
-    # Allow immich-ml user to start/stop services via systemctl for swapping
-    security.sudo.extraRules = [
-      {
-        users = ["immich-ml"];
-        commands = [
-          {
-            command = "${pkgs.systemd}/bin/systemctl";
-            options = ["NOPASSWD"];
-          }
-          {
-            command = "/run/current-system/sw/bin/systemctl";
-            options = ["NOPASSWD"];
-          }
-        ];
-      }
-    ];
-
-    # Cache & lock directories
+    # Cache directories
     systemd.tmpfiles.rules = [
       "d ${cfg.cacheDir} 0775 immich-ml immich-ml - -"
-      "d /run/model-lock 0777 root root - -"
     ];
 
     # 1. Netcat Wake-on-Request Socket on public port (e.g. 3003)
@@ -155,7 +99,7 @@ in {
       };
     };
 
-    # 3. Immich ML Backend Service (started on demand, stopped when LLM is requested)
+    # 3. Immich ML Backend Service (started on demand, stopped when LLM or ComfyUI is requested)
     systemd.services.immich-machine-learning = {
       description = "Immich Machine Learning Backend Service";
       after = ["network.target"];

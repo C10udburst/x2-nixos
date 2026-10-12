@@ -81,10 +81,9 @@ if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
     SERVICE_ACTIVE=0
   fi
 
-  if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
-    # Stop Immich ML if it was running
-    if sudo -n systemctl is-active --quiet immich-machine-learning.service 2>/dev/null; then
-      sudo -n systemctl stop immich-machine-learning.service 2>/dev/null || true
+    # Stop any other active heavy workloads using eval-time generated stop script
+    if [ -n "${STOP_OTHER_WORKLOADS:-}" ] && [ -x "${STOP_OTHER_WORKLOADS:-}" ]; then
+      "$STOP_OTHER_WORKLOADS" "$TARGET_SERVICE"
     fi
 
     # Start target service (systemd Conflicts automatically stops other models)

@@ -119,9 +119,14 @@
       <div id="stream-output" class="bg-base-300 p-4 rounded-box font-mono text-xs text-info min-h-[80px] max-h-96 overflow-y-auto whitespace-pre-wrap">Output will stream here...</div>
     </div>
 
-    <!-- Footer -->
-    <footer class="text-center text-xs text-base-content/40 py-4 border-t border-base-200">
-      GMKtec EVO-X2 • OpenAI Compatible Gateway (:8080) • Immich ML Socket (:3003)
+    <!-- Footer with Dynamic Service Status Dots -->
+    <footer class="space-y-4 py-6 border-t border-base-200">
+      <div class="flex flex-wrap justify-center items-center gap-3 md:gap-5 text-xs" id="footer-services">
+        <!-- Dynamically populated status pills with status dots -->
+      </div>
+      <div class="text-center text-xs text-base-content/40">
+        GMKtec EVO-X2 • AMD Ryzen AI Max+ 395 128GB Unified Memory • Dynamic Single-Workload Architecture
+      </div>
     </footer>
 
   </div>
@@ -184,16 +189,21 @@
 
       state.active = data.active_model;
       state.models = data.models || [];
+      state.services = data.services || [];
 
       const titleEl = document.getElementById('active-title');
       const descEl = document.getElementById('active-desc');
       const unloadBtn = document.getElementById('btn-unload');
       const targetLbl = document.getElementById('playground-target');
 
-      if (state.active === 'immich-machine-learning') {
-        titleEl.textContent = 'Immich Machine Learning';
+      // Dynamically detect if an on-demand service is active
+      const activeService = state.services.find(s => s.id === state.active);
+      if (activeService) {
+        titleEl.textContent = activeService.name;
         titleEl.className = 'text-xl font-bold font-mono text-warning mt-1';
-        descEl.textContent = 'Active photo inference engine on port 3004 (socket activated).';
+        descEl.textContent = activeService.description
+          ? `${activeService.description} (port ${activeService.port}, socket activated).`
+          : `Active service on port ${activeService.port} (socket activated).`;
         unloadBtn.disabled = state.switching;
         targetLbl.textContent = state.models[0]?.name || 'none';
       } else if (state.active) {
@@ -211,7 +221,39 @@
         targetLbl.textContent = state.models[0]?.name || 'none';
       }
 
+      renderFooterServices(state.services);
       renderModels();
+    }
+
+    function renderFooterServices(services) {
+      const footerEl = document.getElementById('footer-services');
+      if (!footerEl) return;
+      if (!services || services.length === 0) {
+        footerEl.innerHTML = '<span class="text-xs text-base-content/40">No defined services.</span>';
+        return;
+      }
+
+      footerEl.innerHTML = services.map(s => {
+        const isAct = s.status === 'active';
+        const isStandby = s.status === 'standby';
+        const dotClass = isAct
+          ? 'bg-success animate-pulse'
+          : (isStandby ? 'bg-info' : 'bg-base-content/30');
+        const badgeClass = isAct
+          ? 'badge-success text-success-content font-bold'
+          : (isStandby ? 'badge-ghost text-info font-semibold' : 'badge-ghost text-base-content/40');
+        const statusLabel = isAct
+          ? 'ACTIVE'
+          : (isStandby ? 'STANDBY (0 MB)' : 'STOPPED');
+
+        return `
+          <div class="flex items-center gap-2 bg-base-200 border border-base-100 px-3 py-1.5 rounded-full shadow-sm">
+            <span class="w-2.5 h-2.5 rounded-full ${dotClass}"></span>
+            <span class="font-semibold text-xs">${s.name} <span class="font-mono text-base-content/60">(:${s.port})</span></span>
+            <span class="badge badge-xs ${badgeClass} font-mono">${statusLabel}</span>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderModels() {
@@ -295,7 +337,8 @@
       btn.disabled = true;
       out.textContent = '';
 
-      const target = (state.active && state.active !== 'immich-machine-learning')
+      const isOnDemandActive = (state.services || []).some(s => s.id === state.active);
+      const target = (state.active && !isOnDemandActive)
         ? state.active
         : (state.models[0]?.name || 'qwen3.8-flash-next');
 

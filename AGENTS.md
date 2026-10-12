@@ -1,4 +1,4 @@
-# GMKtec EVO-X2 AI Inference & Immich Architecture
+# GMKtec EVO-X2 Unified Workload Architecture
 
 This document describes the design, strict contracts, and runtime lifecycle for the **GMKtec EVO-X2** (AMD Ryzen AI Max+ 395 128GB Unified Memory APU) running a bare-minimal NixOS configuration.
 
@@ -11,35 +11,47 @@ digraph EVO_X2 {
   rankdir=TB;
 
   // Ingress
-  client -> nginx [label=":8080 /v1/*"];
+  client -> nginx [label=":8080 /v1/* & /"];
   client -> immich_socket [label=":3003"];
+  client -> comfyui_socket [label=":8188"];
 
   // Gateway pipeline
   nginx -> fcgiwrap -> switcher;
-  switcher -> model_lock [label="flock"];
+  switcher -> workload_lock [label="flock"];
   switcher -> active_llm [label="curl :8081"];
 
-  // Immich pipeline
-  immich_socket -> wake_netcat;
-  wake_netcat -> model_lock [label="flock"];
-  wake_netcat -> immich_ml [label="nc :3004"];
+  // Immich pipeline (0 MB RAM idle)
+  immich_socket -> wake_immich;
+  wake_immich -> workload_lock [label="flock"];
+  wake_immich -> immich_ml [label="nc :3004"];
 
-  // Mutual systemd conflicts (Rule 1)
+  // ComfyUI pipeline (0 MB RAM idle, flake-native)
+  comfyui_socket -> wake_comfyui;
+  wake_comfyui -> workload_lock [label="flock"];
+  wake_comfyui -> comfyui_ml [label="nc :8189"];
+
+  // Mutual systemd conflicts across all workloads (Rule 1)
   active_llm -> immich_ml [label="conflicts", dir=both];
+  active_llm -> comfyui_ml [label="conflicts", dir=both];
+  immich_ml -> comfyui_ml [label="conflicts", dir=both];
 }
 ```
 
 ### Key Principles:
-1. **Single Workload in Memory (Rule 1)**: The 128 GB unified memory pool is shared between Zen 5 CPU cores and the RDNA 3.5 iGPU. To eliminate OOM errors and VRAM thrashing, **exactly one** memory-intensive service (an LLM or the Immich ML engine) is active at any time.
-2. **Independent Lock Protocol (Rule 5)**: Synchronization is strictly decoupled from Nginx or FastCGI. Any component orchestrating model lifecycle acquires `/run/model-lock/model.lock` via `flock`.
-3. **Mutual Systemd Conflicts**: All generated model units and `immich-machine-learning.service` declare mutual `conflicts`. Starting unit B immediately causes systemd to terminate unit A with `SIGINT`.
-4. **Strict Model Contract**: Zero normalization boilerplate in `modules/models.nix`. All builder helpers (`mkGufo`, `mkLlamaCpp`) return objects adhering directly to the contract.
+1. **Single Workload in Memory (Rule 1)**: The 128 GB unified memory pool is shared between Zen 5 CPU cores and the RDNA 3.5 iGPU. To eliminate OOM errors and VRAM thrashing, **exactly one** memory-intensive service (an active LLM, the Immich ML engine, or ComfyUI) is active at any time.
+2. **Three Core Subsystems Supported**:
+   - **LLM Subsystem**: Extensible multi-model registry (`gufo`, `llama-cpp`), FastCGI streaming switcher on port 8080 (`/v1/*`), dynamic model switching.
+   - **Immich Machine Learning**: Photo ML inference on public port 3003, proxying to loopback port 3004 on demand.
+   - **ComfyUI**: Generative AI studio on public port 8188, proxying to loopback port 8189 on demand, packaged declaratively via `github:utensils/comfyui-nix` with pre-built ROCm support (no git clones).
+3. **0 MB RAM Footprint on Boot**: Standalone workloads like Immich and ComfyUI run via systemd socket activation. On boot, only listening sockets exist in kernel memory (~0 MB RAM). Heavy backend services only start upon incoming connections.
+4. **Eval-Time Calculated Conflicts & Stop Script**: Zero ugly unit globbing (e.g. `systemctl list-units ... "gufo-*"`). All exclusive service units are collected at Nix eval time into `allExclusiveUnits`. A dedicated script (`stop-other-workloads`) stops any active conflicting workloads before starting the target.
+5. **Independent Lock Protocol (Rule 5)**: Synchronization is strictly decoupled from Nginx or FastCGI. Any component orchestrating model lifecycle acquires `/run/model-lock/model.lock` via `flock`.
 
 ---
 
 ## 2. Global Model Registry & Strict Contract
 
-Models are defined in `modules/models.nix` within `services.models.<model_id>`.
+LLM models are defined in `modules/models.nix` within `services.models.<model_id>`.
 
 ### The Contract
 Every model entry in `services.models` MUST adhere to the following attribute schema:
@@ -81,108 +93,65 @@ Generates a `llama-server` service for any standard GGUF model:
 };
 ```
 
-#### Custom Services
-You can also manually wire any arbitrary OpenAI-compatible service without helper functions:
-```nix
-"my-service" = {
-  serviceName = "my-custom.service";
-  remappedModel = "actual-model-name";
-  url = "http://127.0.0.1:9090";
-  description = "Custom inference server";
-  systemdService = { ... };
-};
-```
-
-It is **highly** advised to create your own `mkMyService` helper function to enforce the strict contract and avoid boilerplate.
-
 ---
 
-## 3. Independent Model Lock Protocol
+## 3. Workload Orchestration & Lock Protocol (`modules/workload-manager.nix`)
 
 - **Lock File**: `/run/model-lock/model.lock`
 - **State File**: `/run/model-lock/active_model`
-- **Permissions**: Created at boot by `systemd.tmpfiles.rules` (`0777 root root`), eliminating runtime `mkdir` calls.
+- **Permissions**: Created at boot by `systemd.tmpfiles.rules` (`0777 root root`).
 
-### Switching Flow:
+### Workload Switching Flow:
 1. Process opens file descriptor 9 to `/run/model-lock/model.lock`.
 2. Acquires exclusive lock: `flock -x 9`.
 3. Checks `/run/model-lock/active_model`.
 4. If target workload differs from active workload:
-   - Stops active workload / triggers `systemctl start <target_service>`.
-   - Polls target HTTP health endpoint until responsive (or deadline).
+   - Executes eval-time generated `stop-other-workloads <target_unit>` which checks and cleanly terminates any running unit in `allExclusiveUnits`.
+   - Starts target workload: `systemctl start <target_service>`.
+   - Polls target health check endpoint until responsive (or timeout).
    - Writes active workload identifier to `/run/model-lock/active_model`.
 5. Releases lock: `flock -u 9`.
 
 ---
 
-## 4. Main Gateway & Switcher (`modules/dash/`)
+## 4. Generic On-Demand Socket Activation (`modules/on-demand/mkWakeScript.nix`)
+
+Both Immich ML and ComfyUI use the generic `mkWakeScript` helper:
+- **Immich ML (`modules/immich/default.nix`)**: Listens on `:3003` -> forwards to `:3004` on request.
+- **ComfyUI (`modules/comfyui/default.nix`)**: Listens on `:8188` -> forwards to `:8189` on request. Packaged via `github:utensils/comfyui-nix` with pre-built ROCm wheels.
+
+### Lifecycle:
+1. Only `<name>-listener.socket` is enabled on boot (`wantedBy = ["sockets.target"]`).
+2. When a TCP client connects, systemd spawns `<name>-listener@.service`.
+3. Handler acquires the lock, calls `stop-other-workloads`, starts the backend, verifies health, and transparently connects client traffic via `nc 127.0.0.1 <backendPort>`.
+
+---
+
+## 5. Main Gateway & Dashboard (`modules/dash/`)
 
 The gateway runs on **port 8080**:
-- **`/` & `/index.html`**: Wire-speed static HTML dashboard (`modules/dash/dashboard.html`).
-- **`/api/*`**: Python FastAPI/CGI wrapper (`modules/dash/dash.py`) for system memory, VRAM/GTT telemetry, and manual switching.
-- **`/v1/*`**: Hot-path Bash + `jq` switcher (`modules/dash/switcher.sh`).
-
-### Model Remapping (Rule 2)
-When an incoming request arrives with a JSON body:
-1. `switcher.sh` extracts `.model`.
-2. Looks up the model in `models-registry.json`.
-3. If not currently loaded, activates it via the independent lock.
-4. Rewrites the request body: `.model = $REMAPPED_MODEL`.
-5. Forwards to `$TARGET_URL` with zero-buffering SSE streaming.
-
-### Models Discovery
-`GET /v1/models` returns an OpenAI-compliant list of all configured models directly from the declarative registry without waking idle services.
+- **`/` & `/index.html`**: Static HTML dashboard with real-time hardware telemetry and live service status indicators in the footer (`modules/dash/dashboard.html`).
+- **`/api/status`**: Dynamic API returning system memory, GPU VRAM & GTT, active workload, models list, and status pills for all defined services (Gateway, Immich ML, ComfyUI).
+- **`/v1/*`**: Hot-path Bash + `jq` switcher (`modules/dash/switcher.sh`) with request model remapping and automatic workload unloading.
 
 ---
 
-## 5. Immich Machine Learning Server (`modules/immich/`)
-
-The GMKtec EVO-X2 can act as a remote ML acceleration server for an Immich instance.
-- **Public Port**: `3003` (standard Immich ML port)
-- **Internal Backend Port**: `3004` (loopback)
-
-### Netcat Wake-on-Request Socket Activation:
-1. **Systemd Socket** (`immich-ml-listener.socket`) listens on port 3003. When idle, 0 bytes of VRAM are used.
-2. When Immich sends photo inference requests, socket activation invokes `immich-ml-listener@.service`.
-3. The wake script:
-   - Takes the independent lock `/run/model-lock/model.lock`.
-   - Stops all running LLMs (`gufo-*`, `llama-cpp-*`).
-   - Starts `immich-machine-learning.service` on loopback port 3004.
-   - Waits for `http://127.0.0.1:3004/ping` to succeed.
-   - Forwards client traffic transparently to port 3004 via `nc 127.0.0.1 3004`.
-4. If an LLM request arrives later on port 8080, `switcher.sh` takes the lock, stops `immich-machine-learning.service`, and loads the LLM.
-
----
-
-## 6. Hugging Face Model Downloads
-
-The system includes pre-configured tools for fast GGUF downloads to `/srv/models`:
-- **`huggingface-cli`**: Available in system `PATH`.
-  ```
-
----
-
-## 7. System & Memory Safeguards
-
-1. **16GB Swapfile**: Configured at `/var/lib/swapfile` via `swapDevices` to ensure memory headroom during model shard transitions.
-2. **Volatile Journald & PAM Limits**: Volatile in-memory logs capped at 32MB and unlimited memlock PAM limits for large model mmap allocations.
-
----
-
-## 8. Directory Structure
+## 6. Directory Structure
 
 ```
 .
-├── AGENTS.md                   # This architecture guide
-├── configuration.nix           # System imports and host configuration
-├── flake.nix                   # Flake inputs (nixpkgs, gufo) and outputs
+├── AGENTS.md                   # Architecture guide
+├── configuration.nix           # Host configuration and module imports
+├── flake.nix                   # Flake inputs (nixpkgs, gufo, comfyui-nix, disko)
 ├── hardware-configuration.nix  # Host hardware and disk mounts
 └── modules/
+    ├── comfyui/
+    │   └── default.nix         # ComfyUI on-demand service (flake-native)
     ├── dash/
     │   ├── default.nix         # Gateway Nginx, FastCGI, and switcher script
-    │   ├── dashboard.nix       # Dashboard JSON metadata and API script
+    │   ├── dashboard.nix       # Dashboard JSON metadata
     │   ├── dash.py             # Telemetry & status Python CGI API
-    │   ├── dashboard.html      # Real-time web UI
+    │   ├── dashboard.html      # Real-time web UI with service status indicators
     │   └── switcher.sh         # Hot-path /v1/* FastCGI switcher with remapping
     ├── gufo/
     │   ├── default.nix         # Gufo user, permissions, and tmpfiles
@@ -192,8 +161,12 @@ The system includes pre-configured tools for fast GGUF downloads to `/srv/models
     ├── llama-cpp/
     │   ├── default.nix         # llama-cpp base options and user
     │   └── mkLlamaCpp.nix      # mkLlamaCpp helper implementing strict model contract
+    ├── on-demand/
+    │   └── mkWakeScript.nix    # Generic netcat wake-on-request script generator
     ├── minimal.nix             # Kernel sysctl, 16GB swapfile, hf-download, tools
-    ├── models.nix              # Central models registry & mutual conflict wiring
-    ├── openssh.nix             # SSH configuration & authorized keys
-    └── tailscale.nix           # Tailscale mesh networking
+    ├── models.nix              # Central models registry & workload coordinator
+    ├── pkgs.nix                # System utility packages
+    ├── tailscale.nix           # Tailscale mesh networking
+    ├── users.nix               # User accounts & SSH keys
+    └── workload-manager.nix    # Central eval-time exclusive workload manager
 ```

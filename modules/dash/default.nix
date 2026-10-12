@@ -6,11 +6,43 @@
 }: let
   cfg = config.services.gateway;
 
-  # Serialized model metadata from global models registry contract
+  # Serialized model and workload metadata from global registry contract
   modelsConfig = {
     default_model = config.services.defaultModel;
     lock_file = "/run/model-lock/model.lock";
     state_file = "/run/model-lock/active_model";
+    all_exclusive_units = config.services.workload-manager.allExclusiveUnits;
+    services =
+      [
+        {
+          id = "gateway";
+          name = "API Gateway";
+          port = cfg.port;
+          type = "gateway";
+          unit = "nginx.service";
+          description = "OpenAI compatible API gateway & dashboard";
+        }
+      ]
+      ++ (lib.optional (config.services ? immich-ml && config.services.immich-ml.enable) {
+        id = "immich-machine-learning";
+        name = "Immich ML";
+        port = config.services.immich-ml.port;
+        backend_port = config.services.immich-ml.backendPort;
+        type = "on-demand";
+        unit = "immich-machine-learning.service";
+        socket_unit = "immich-ml-listener.socket";
+        description = "Immich photo ML inference engine";
+      })
+      ++ (lib.optional (config.services ? comfyui && config.services.comfyui.enable) {
+        id = "comfyui";
+        name = "ComfyUI";
+        port = config.services.comfyui.port;
+        backend_port = config.services.comfyui.backendPort;
+        type = "on-demand";
+        unit = "comfyui.service";
+        socket_unit = "comfyui-listener.socket";
+        description = "ComfyUI generative AI studio";
+      });
     models = lib.mapAttrs (_: m: {
       service_name = m.serviceName;
       remapped_model = m.remappedModel;
@@ -54,6 +86,7 @@
       pkgs.systemd
     ]}:$PATH"
     export MODELS_CONFIG_PATH="${modelsJsonFile}"
+    export STOP_OTHER_WORKLOADS="${config.services.workload-manager.stopScript}"
     exec ${./switcher.sh} "$@"
   '';
 in {
@@ -76,23 +109,6 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    # Allow gufo user passwordless sudo strictly for systemctl commands
-    security.sudo.extraRules = [
-      {
-        users = ["gufo"];
-        commands = [
-          {
-            command = "${pkgs.systemd}/bin/systemctl";
-            options = ["NOPASSWD"];
-          }
-          {
-            command = "/run/current-system/sw/bin/systemctl";
-            options = ["NOPASSWD"];
-          }
-        ];
-      }
-    ];
-
     # Ultra-minimal fcgiwrap instance (~1MB memory)
     services.fcgiwrap.instances.gateway = {
       process.user = "gufo";
