@@ -1,4 +1,4 @@
-# AGENTS.md — GMKtec EVO-X2 AI Inference & Immich Architecture
+# GMKtec EVO-X2 AI Inference & Immich Architecture
 
 This document describes the design, strict contracts, and runtime lifecycle for the **GMKtec EVO-X2** (AMD Ryzen AI Max+ 395 128GB Unified Memory APU) running a bare-minimal NixOS configuration.
 
