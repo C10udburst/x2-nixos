@@ -3,13 +3,13 @@
   pkgs,
   lib,
   ...
-}:
-{
+}: {
   imports = [
     ./hardware-configuration.nix
     ./modules/dash
     ./modules/minimal.nix
     ./modules/models.nix
+    ./modules/network.nix
     ./modules/nix.nix
     ./modules/pkgs.nix
     ./modules/tailscale.nix

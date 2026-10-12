@@ -7,14 +7,18 @@
   cfg = config.services.llamacpp;
 in {
   options.services.llamacpp = {
-    enable = lib.mkEnableOption "llama.cpp server inference base support" // {
-      default = true;
-    };
+    enable =
+      lib.mkEnableOption "llama.cpp server inference base support"
+      // {
+        default = true;
+      };
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.llama-cpp;
-      description = "llama-cpp package containing llama-server binary.";
+      default = pkgs.llama-cpp.override {
+        rocmSupport = true;
+      };
+      description = "llama-cpp package containing llama-server binary with ROCm acceleration.";
     };
 
     backendPort = lib.mkOption {

@@ -83,13 +83,17 @@ Generates a Gufo inference service running native ROCm/GGUF:
 ```
 
 #### `mkLlamaCpp` (`modules/llama-cpp/mkLlamaCpp.nix`)
-Generates a `llama-server` service for any standard GGUF model:
+Generates a `llama-server` service for any standard GGUF model with ROCm acceleration:
 ```nix
 "llama-3.2-3b" = mkLlamaCpp {
   modelId = "llama-3.2-3b";
   description = "Llama 3.2 3B Instruct via llama-server";
   modelPath = "llama-3.2-3b/Llama-3.2-3B-Instruct-Q8_0.gguf";
-  gpuLayers = 99; # Offload all layers to GPU
+  gpuLayers = 99;      # Offload all layers to RDNA 3.5 iGPU
+  parallel = 1;        # Single server slot to avoid multiplying KV cache VRAM
+  flashAttention = true; # Flash Attention enabled for APU memory bandwidth scaling
+  threads = 16;        # Match physical Zen 5 cores (Ryzen AI Max+ 395)
+  jinja = true;        # Proper chat template formatting & reasoning tags
 };
 ```
 
@@ -165,6 +169,8 @@ The gateway runs on **port 8080**:
     │   └── mkWakeScript.nix    # Generic netcat wake-on-request script generator
     ├── minimal.nix             # Kernel sysctl, 16GB swapfile, hf-download, tools
     ├── models.nix              # Central models registry & workload coordinator
+    ├── network.nix             # Static IP, DNS nameservers & gateway networking
+    ├── nix.nix                 # Nix daemon, flakes, GC, and nix-command options
     ├── pkgs.nix                # System utility packages
     ├── tailscale.nix           # Tailscale mesh networking
     ├── users.nix               # User accounts & SSH keys

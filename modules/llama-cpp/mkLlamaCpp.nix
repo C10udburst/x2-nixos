@@ -10,14 +10,26 @@
   remappedModel ? modelId,
   description ? "",
   context ? null,
+  parallel ? 1,
+  flashAttention ? true,
+  threads ? 16,
+  cacheTypeK ? null,
+  cacheTypeV ? null,
+  jinja ? true,
+  mlock ? false,
   port ? (config.services.llamacpp.backendPort or 8082),
   modelsDir ? (config.services.llamacpp.modelsDir or "/srv/models"),
-  package ? (config.services.llamacpp.package or pkgs.llama-cpp),
+  package ? (config.services.llamacpp.package or (pkgs.llama-cpp.override {rocmSupport = true;})),
   gpuLayers ? 99,
   mmprojPath ? null,
   extraArgs ? [],
   env ? {},
 }: let
+  defaultEnv = {
+    HSA_OVERRIDE_GFX_VERSION = "11.5.1";
+    HIP_VISIBLE_DEVICES = "0";
+  };
+
   launcher = pkgs.writeShellScript "llama-cpp-run-${modelId}" ''
     set -euo pipefail
 
@@ -46,10 +58,35 @@
       --port "${toString port}"
       -ngl "${toString gpuLayers}"
       --alias "${remappedModel}"
+      -np "${toString parallel}"
     )
+
+    ${lib.optionalString (threads != null) ''
+      ARGS+=(-t "${toString threads}")
+    ''}
+
+    ${lib.optionalString flashAttention ''
+      ARGS+=(-fa on)
+    ''}
+
+    ${lib.optionalString jinja ''
+      ARGS+=(--jinja)
+    ''}
+
+    ${lib.optionalString mlock ''
+      ARGS+=(--mlock)
+    ''}
 
     ${lib.optionalString (context != null) ''
       ARGS+=(-c "${toString context}")
+    ''}
+
+    ${lib.optionalString (cacheTypeK != null) ''
+      ARGS+=(-ctk "${cacheTypeK}")
+    ''}
+
+    ${lib.optionalString (cacheTypeV != null) ''
+      ARGS+=(-ctv "${cacheTypeV}")
     ''}
 
     ${lib.optionalString (mmprojPath != null) ''
@@ -72,7 +109,7 @@ in {
   systemdService = {
     description = "llama.cpp LLM Service: ${modelId} (${description})";
     after = ["network.target"];
-    environment = env;
+    environment = defaultEnv // env;
 
     serviceConfig = {
       Type = "simple";
