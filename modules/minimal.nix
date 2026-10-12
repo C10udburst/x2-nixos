@@ -76,6 +76,12 @@
   # Performance CPU frequency governor for minimal inference latency
   powerManagement.cpuFreqGovernor = lib.mkDefault "performance";
 
+  # 5. AMD RDNA 3.5 APU (gfx1151) ROCm & HIP runtime environment
+  environment.variables = {
+    HSA_OVERRIDE_GFX_VERSION = "11.5.1";
+    HIP_VISIBLE_DEVICES = "0";
+  };
+
   # Security limits for LLM inference (unlimited locked memory and large fd count)
   security.pam.loginLimits = [
     {

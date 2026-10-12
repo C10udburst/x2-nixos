@@ -29,6 +29,11 @@
     then inputs.gufo.packages.${pkgs.system}.default
     else pkgs.gufo or null;
 
+  defaultEnv = {
+    HSA_OVERRIDE_GFX_VERSION = "11.5.1";
+    HIP_VISIBLE_DEVICES = "0";
+  };
+
   launcher = pkgs.writeShellScript "gufo-run-${modelId}" ''
     set -euo pipefail
 
@@ -105,7 +110,7 @@ in {
   systemdService = {
     description = "Gufo LLM Service: ${modelId} (${description})";
     after = ["network.target"];
-    environment = env;
+    environment = defaultEnv // env;
 
     serviceConfig = {
       Type = "simple";

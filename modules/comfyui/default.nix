@@ -11,36 +11,19 @@
   comfyuiPkg =
     if cfg.package != null
     then cfg.package
-    else if inputs ? comfyui-nix && inputs.comfyui-nix ? packages
-    then
-      (
-        if cfg.gpuSupport == "rocm"
-        then inputs.comfyui-nix.packages.${pkgs.system}.rocm
-        else if cfg.gpuSupport == "cuda"
-        then inputs.comfyui-nix.packages.${pkgs.system}.cuda
-        else inputs.comfyui-nix.packages.${pkgs.system}.default
-      )
-    else pkgs.comfyui;
+    else inputs.comfyui-nix.packages.${pkgs.system}.rocm;
 
   launcher = pkgs.writeShellScript "comfyui-launcher" ''
     set -euo pipefail
 
-    mkdir -p "${cfg.dataDir}"
-    mkdir -p "${cfg.dataDir}/models" "${cfg.dataDir}/custom_nodes" "${cfg.dataDir}/input" "${cfg.dataDir}/output"
+    mkdir -p "${cfg.dataDir}"/{models,custom_nodes,input,output}
     cd "${cfg.dataDir}"
 
     ${lib.optionalString (cfg.command != null) ''
-      echo "Launching ComfyUI via custom command..."
       exec ${cfg.command}
     ''}
 
-    COMFY_BIN="${comfyuiPkg}/bin/comfy-ui"
-    if [ ! -x "$COMFY_BIN" ]; then
-      COMFY_BIN="${lib.getExe comfyuiPkg}"
-    fi
-
-    echo "Launching ComfyUI (${cfg.gpuSupport}) on 127.0.0.1:${toString cfg.backendPort}..."
-    exec "$COMFY_BIN" \
+    exec ${comfyuiPkg}/bin/comfy-ui \
       --listen 127.0.0.1 \
       --port "${toString cfg.backendPort}" \
       --base-directory "${cfg.dataDir}" \
@@ -53,14 +36,14 @@
     backendPort = cfg.backendPort;
     healthCheckCmd = "${pkgs.curl}/bin/curl -s -f http://127.0.0.1:${toString cfg.backendPort}/ >/dev/null 2>&1";
     timeoutSec = cfg.timeoutSec;
-    description = "ComfyUI backend";
+    description = "ComfyUI ROCm backend";
     stopScript = config.services.workload-manager.stopScript;
   };
 in {
   disabledModules = ["services/misc/comfyui.nix"];
 
   options.services.comfyui = {
-    enable = lib.mkEnableOption "ComfyUI with dynamic workload unloading" // {
+    enable = lib.mkEnableOption "ComfyUI with dynamic ROCm workload unloading" // {
       default = true;
     };
 
@@ -82,22 +65,16 @@ in {
       description = "Working and data directory for ComfyUI.";
     };
 
-    gpuSupport = lib.mkOption {
-      type = lib.types.enum ["rocm" "cuda" "cpu"];
-      default = "rocm";
-      description = "GPU acceleration backend from comfyui-nix flake (rocm for AMD APU).";
-    };
-
     package = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;
-      description = "ComfyUI package. If null, automatically resolved from comfyui-nix flake.";
+      description = "ComfyUI ROCm package override. Defaults to comfyui-nix.packages.rocm.";
     };
 
     command = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Custom command to start ComfyUI. If null, automated launcher is used.";
+      description = "Custom command to start ComfyUI. If null, comfy-ui binary is used.";
     };
 
     extraArgs = lib.mkOption {
@@ -108,12 +85,8 @@ in {
 
     environment = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
-      default = {
-        HSA_OVERRIDE_GFX_VERSION = "11.5.1";
-        ROCM_PATH = "/run/current-system/sw";
-        HIP_VISIBLE_DEVICES = "0";
-      };
-      description = "Environment variables for ComfyUI (e.g. ROCm gfx1151 overrides for Ryzen AI Max+ 395).";
+      default = {};
+      description = "Extra environment variables for ComfyUI.";
     };
 
     timeoutSec = lib.mkOption {
@@ -124,7 +97,7 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    # System user for ComfyUI with direct GPU/APU access
+    # System user for ComfyUI with direct APU/GPU access
     users.users.comfyui = {
       isSystemUser = true;
       group = "comfyui";
@@ -137,7 +110,6 @@ in {
     };
     users.groups.comfyui = {};
 
-    # Cache & state directories
     systemd.tmpfiles.rules = [
       "d ${cfg.dataDir} 0775 comfyui comfyui - -"
     ];
@@ -152,7 +124,7 @@ in {
       };
     };
 
-    # 2. Socket-activated connection instance forwarder using netcat
+    # 2. Socket-activated connection instance forwarder
     systemd.services."comfyui-listener@" = {
       description = "ComfyUI Netcat Connection Handler";
       serviceConfig = {
@@ -165,14 +137,17 @@ in {
       };
     };
 
-    # 3. ComfyUI Backend Service (started on demand, stopped when LLM or Immich is requested)
+    # 3. ComfyUI Backend Service (started on demand, stopped when other heavy workloads request VRAM)
     systemd.services.comfyui = {
-      description = "ComfyUI Generative AI Backend Service";
+      description = "ComfyUI Generative AI Backend Service (ROCm gfx1151)";
       after = ["network.target"];
 
       environment = {
         COMFYUI_HOST = "127.0.0.1";
         COMFYUI_PORT = toString cfg.backendPort;
+        # AMD Ryzen AI Max+ 395 (gfx1151 RDNA 3.5 APU) settings
+        HSA_OVERRIDE_GFX_VERSION = "11.5.1";
+        HIP_VISIBLE_DEVICES = "0";
       } // cfg.environment;
 
       serviceConfig = {
@@ -206,7 +181,6 @@ in {
       };
     };
 
-    # Open ComfyUI public port in firewall
     networking.firewall.allowedTCPPorts = [cfg.port];
   };
 }
