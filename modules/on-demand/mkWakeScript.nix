@@ -13,6 +13,13 @@
 pkgs.writeShellScript "wake-netcat-${workloadId}" ''
   set -euo pipefail
 
+  export PATH="/run/wrappers/bin:${lib.makeBinPath [
+    pkgs.util-linux
+    pkgs.coreutils
+    pkgs.systemd
+    pkgs.netcat-openbsd
+  ]}:$PATH"
+
   LOCK_FILE="/run/model-lock/model.lock"
   STATE_FILE="/run/model-lock/active_model"
   BACKEND_PORT="${toString backendPort}"

@@ -126,8 +126,23 @@ in {
     };
     users.groups.gateway = {};
 
-    # Ultra-minimal fcgiwrap instance (~1MB memory)
+    # Dedicated fcgiwrap instance for Dashboard API (/api/*)
+    services.fcgiwrap.instances.dash = {
+      process.prefork = 4;
+      process.user = "gateway";
+      process.group = "gateway";
+      socket = {
+        type = "unix";
+        address = "/run/fcgiwrap-dash.sock";
+        user = "gateway";
+        group = "gateway";
+        mode = "0660";
+      };
+    };
+
+    # Dedicated fcgiwrap instance for /v1/* inference hot path
     services.fcgiwrap.instances.gateway = {
+      process.prefork = 8;
       process.user = "gateway";
       process.group = "gateway";
       socket = {
@@ -183,10 +198,10 @@ in {
           '';
         };
 
-        # 3. Python Dashboard API (/api/*)
+        # 3. Python Dashboard API (/api/*) on isolated fastcgi socket
         locations."/api/" = {
           extraConfig = ''
-            fastcgi_pass unix:/run/fcgiwrap-gateway.sock;
+            fastcgi_pass unix:/run/fcgiwrap-dash.sock;
             include ${pkgs.nginx}/conf/fastcgi_params;
             fastcgi_param SCRIPT_FILENAME ${dashScript};
             fastcgi_buffering off;

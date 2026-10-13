@@ -116,7 +116,16 @@
         <button class="btn btn-ghost btn-sm" onclick="clearPlayground()">Clear</button>
         <button id="btn-send" class="btn btn-primary btn-sm" onclick="sendInference()">Generate Stream</button>
       </div>
-      <div id="stream-output" class="bg-base-300 p-4 rounded-box font-mono text-xs text-info min-h-[80px] max-h-96 overflow-y-auto whitespace-pre-wrap">Output will stream here...</div>
+      <div id="stream-output" class="bg-base-300 p-4 rounded-box font-mono text-xs min-h-[80px] max-h-96 overflow-y-auto">
+        <div id="stream-reasoning" class="hidden mb-3 p-3 bg-base-200/90 border-l-2 border-warning rounded text-warning/90 whitespace-pre-wrap">
+          <div class="text-[10px] uppercase font-bold text-warning/70 mb-1 flex items-center gap-1.5">
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-warning animate-pulse"></span>
+            Reasoning Trace
+          </div>
+          <div id="stream-reasoning-text"></div>
+        </div>
+        <div id="stream-content" class="text-info whitespace-pre-wrap">Output will stream here...</div>
+      </div>
     </div>
 
     <!-- Footer with Dynamic Service Status Dots -->
@@ -325,7 +334,14 @@
     }
 
     function clearPlayground() {
-      document.getElementById('stream-output').textContent = '';
+      const reasoning = document.getElementById('stream-reasoning');
+      const reasoningText = document.getElementById('stream-reasoning-text');
+      const content = document.getElementById('stream-content');
+      if (reasoning) reasoning.classList.add('hidden');
+      if (reasoningText) reasoningText.textContent = '';
+      if (content) content.textContent = '';
+      const out = document.getElementById('stream-output');
+      if (out) out.scrollTop = 0;
     }
 
     async function sendInference() {
@@ -334,13 +350,19 @@
 
       const out = document.getElementById('stream-output');
       const btn = document.getElementById('btn-send');
+      const reasoning = document.getElementById('stream-reasoning');
+      const reasoningText = document.getElementById('stream-reasoning-text');
+      const content = document.getElementById('stream-content');
+
       btn.disabled = true;
-      out.textContent = '';
+      clearPlayground();
 
       const isOnDemandActive = (state.services || []).some(s => s.id === state.active);
       const target = (state.active && !isOnDemandActive)
         ? state.active
         : (state.models[0]?.name || 'qwen3.8-flash-next');
+
+      let inThinkTag = false;
 
       try {
         const res = await fetch('/v1/chat/completions', {
@@ -350,12 +372,12 @@
             model: target,
             messages: [{ role: 'user', content: prompt }],
             stream: true,
-            max_tokens: 512
+            max_tokens: 1024
           })
         });
 
         if (!res.ok) {
-          out.textContent = `Error (${res.status}): ${await res.text()}`;
+          content.textContent = `Error (${res.status}): ${await res.text()}`;
           return;
         }
 
@@ -377,14 +399,49 @@
               if (str === '[DONE]') break;
               try {
                 const json = JSON.parse(str);
-                out.textContent += json.choices?.[0]?.delta?.content || '';
+                const delta = json.choices?.[0]?.delta;
+                const rChunk = delta?.reasoning_content || delta?.reasoning || delta?.thought || '';
+                let cChunk = delta?.content || delta?.text || json.choices?.[0]?.text || '';
+
+                if (rChunk) {
+                  if (reasoning.classList.contains('hidden')) {
+                    reasoning.classList.remove('hidden');
+                  }
+                  reasoningText.textContent += rChunk;
+                }
+
+                if (cChunk) {
+                  if (cChunk.includes('<think>')) {
+                    inThinkTag = true;
+                    if (reasoning.classList.contains('hidden')) {
+                      reasoning.classList.remove('hidden');
+                    }
+                    const parts = cChunk.split('<think>');
+                    if (parts[0]) content.textContent += parts[0];
+                    cChunk = parts.slice(1).join('<think>');
+                  }
+
+                  if (inThinkTag) {
+                    if (cChunk.includes('</think>')) {
+                      inThinkTag = false;
+                      const parts = cChunk.split('</think>');
+                      reasoningText.textContent += parts[0];
+                      const after = parts.slice(1).join('</think>');
+                      if (after) content.textContent += after;
+                    } else {
+                      reasoningText.textContent += cChunk;
+                    }
+                  } else {
+                    content.textContent += cChunk;
+                  }
+                }
                 out.scrollTop = out.scrollHeight;
               } catch (_) {}
             }
           }
         }
       } catch (err) {
-        out.textContent += `\n[Error: ${err.message}]`;
+        content.textContent += `\n[Error: ${err.message}]`;
       } finally {
         btn.disabled = false;
         fetchStatus();
