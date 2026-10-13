@@ -9,7 +9,7 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-REPO_URL="https://github.com/C10udburst/x2-nixos.git"
+REPO_URL="https://gitea.home.praworzadnyzly.pl/miecz/x2-nixos.git"
 TARGET_DISK="/dev/nvme0n1"
 
 cleanup() {
