@@ -2,10 +2,9 @@
   config,
   lib,
   pkgs,
-  inputs ? { },
+  inputs ? {},
   ...
-}:
-let
+}: let
   mkGufo = import ./gufo/mkGufo.nix {
     inherit
       pkgs
@@ -14,9 +13,8 @@ let
       inputs
       ;
   };
-  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix { inherit pkgs lib config; };
-in
-{
+  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix {inherit pkgs lib config;};
+in {
   imports = [
     ./workload-manager.nix
     ./gufo
@@ -65,7 +63,7 @@ in
           };
         }
       );
-      default = { };
+      default = {};
       description = "Global map of model_id -> { serviceName, remappedModel, url, systemdService, ... }";
     };
   };
@@ -76,20 +74,21 @@ in
     };
 
     # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
-    systemd.services = lib.mapAttrs' (
-      _: m:
-      let
-        unitAttr = lib.removeSuffix ".service" m.serviceName;
-        otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
-      in
-      lib.nameValuePair unitAttr (
-        m.systemdService
-        // {
-          conflicts = (m.systemdService.conflicts or [ ]) ++ otherUnits;
-          wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
-        }
+    systemd.services =
+      lib.mapAttrs' (
+        _: m: let
+          unitAttr = lib.removeSuffix ".service" m.serviceName;
+          otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
+        in
+          lib.nameValuePair unitAttr (
+            m.systemdService
+            // {
+              conflicts = (m.systemdService.conflicts or []) ++ otherUnits;
+              wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
+            }
+          )
       )
-    ) config.services.models;
+      config.services.models;
 
     # Global models map definition
     services.models = {
@@ -102,6 +101,18 @@ in
         speculative = "mtp";
         mtpModelPath = "qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf";
         context = 262144;
+        sessions = 1;
+      };
+
+      # 2. Qwen 3.8 27B with DFlash2 speculative decoding & vision
+      "qwen3.8-27b" = mkGufo {
+        modelId = "qwen3.8-27b";
+        description = "Qwen 3.8 27B UD-Q4_K_XL with DFlash2 speculative decoding & vision";
+        modelPath = "qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf";
+        mmprojPath = "qwen3.8-27b/mmproj-BF16.gguf";
+        speculative = "dflash2";
+        dflashModelPath = "qwen3.8-27b/Qwen3.8-27B-DFlash2-Q4_K_M.gguf";
+        context = 32768;
         sessions = 1;
       };
 

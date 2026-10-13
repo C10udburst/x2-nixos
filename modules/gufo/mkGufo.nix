@@ -19,6 +19,16 @@
   speculative ? null,
   mtpModelPath ? null,
   draftModelPath ? null,
+  dflashModelPath ? (
+    if speculative == "dflash2"
+    then draftModelPath
+    else null
+  ),
+  dsparkModelPath ? (
+    if speculative == "dspark"
+    then draftModelPath
+    else null
+  ),
   extraArgs ? [],
   env ? {},
 }: let
@@ -90,12 +100,20 @@
       ARGS+=(--mtp-model "$MTP_PATH")
     ''}
 
-    ${lib.optionalString (draftModelPath != null) ''
-      DRAFT_PATH="${modelsDir}/${draftModelPath}"
-      if [ ! -f "$DRAFT_PATH" ] && [ -f "${draftModelPath}" ]; then
-        DRAFT_PATH="${draftModelPath}"
+    ${lib.optionalString (dflashModelPath != null) ''
+      DFLASH_PATH="${modelsDir}/${dflashModelPath}"
+      if [ ! -f "$DFLASH_PATH" ] && [ -f "${dflashModelPath}" ]; then
+        DFLASH_PATH="${dflashModelPath}"
       fi
-      ARGS+=(--draft-model "$DRAFT_PATH")
+      ARGS+=(--dflash-model "$DFLASH_PATH")
+    ''}
+
+    ${lib.optionalString (dsparkModelPath != null) ''
+      DSPARK_PATH="${modelsDir}/${dsparkModelPath}"
+      if [ ! -f "$DSPARK_PATH" ] && [ -f "${dsparkModelPath}" ]; then
+        DSPARK_PATH="${dsparkModelPath}"
+      fi
+      ARGS+=(--dspark-model "$DSPARK_PATH")
     ''}
 
     ${lib.concatMapStringsSep "\n" (arg: "ARGS+=(${lib.escapeShellArg arg})") extraArgs}
