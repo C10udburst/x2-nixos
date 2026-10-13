@@ -29,7 +29,7 @@
     (final: prev: {
       pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
         (python-final: python-prev: {
-          anyio = python-prev.anyio.overridePythonAttrs (_: {
+          anyio = python-prev.anyio.overridePythonAttrs (oldAttrs: {
             doCheck = false;
             doInstallCheck = false;
           });
