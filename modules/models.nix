@@ -83,23 +83,38 @@ in {
         mmprojPath = "qwen3.8-flash-next/mmproj-BF16.gguf";
         speculative = "mtp";
         mtpModelPath = "qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf";
+        context = 262144;
         sessions = 1;
       };
 
       # 2. Example Second Model: Qwen 2.5 72B Instruct
-      "qwen2.5-72b-instruct" = mkGufo {
+      "qwen2.5-72b-instruct" = mkLlamaCpp {
         modelId = "qwen2.5-72b-instruct";
         description = "Qwen 2.5 72B Instruct (Q4_K_M) - High reasoning capability";
         modelPath = "qwen2.5-72b-instruct";
-        sessions = 1;
+        context = 131072;
+        cacheTypeK = "q8_0";
+        cacheTypeV = "q8_0";
+        gpuLayers = 99;
+        parallel = 1;
+        flashAttention = true;
+        threads = 16;
+        jinja = true;
       };
 
       # 3. Example Third Model: DeepSeek R1 Distill Qwen 32B
-      "deepseek-r1-distill-qwen-32b" = mkGufo {
+      "deepseek-r1-distill-qwen-32b" = mkLlamaCpp {
         modelId = "deepseek-r1-distill-qwen-32b";
         description = "DeepSeek R1 Distill Qwen 32B (Q8_0) - Deep reasoning specialist";
         modelPath = "deepseek-r1-distill-qwen-32b";
-        sessions = 1;
+        context = 131072;
+        cacheTypeK = "q8_0";
+        cacheTypeV = "q8_0";
+        gpuLayers = 99;
+        parallel = 1;
+        flashAttention = true;
+        threads = 16;
+        jinja = true;
       };
 
       # 4. Example llama.cpp Model (easily add/enable llama.cpp models):

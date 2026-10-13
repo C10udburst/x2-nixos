@@ -117,15 +117,23 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
+    # Dedicated user for API gateway and non-inference processes
+    users.users.gateway = {
+      isSystemUser = true;
+      group = "gateway";
+      description = "AI Gateway Service User";
+    };
+    users.groups.gateway = {};
+
     # Ultra-minimal fcgiwrap instance (~1MB memory)
     services.fcgiwrap.instances.gateway = {
-      process.user = "gufo";
-      process.group = "gufo";
+      process.user = "gateway";
+      process.group = "gateway";
       socket = {
         type = "unix";
         address = "/run/fcgiwrap-gateway.sock";
-        user = "nginx";
-        group = "nginx";
+        user = "gateway";
+        group = "gateway";
         mode = "0660";
       };
     };
@@ -133,6 +141,8 @@ in {
     # Bare-minimal Nginx reverse proxy / FastCGI front (~3MB memory)
     services.nginx = {
       enable = true;
+      user = "gateway";
+      group = "gateway";
       recommendedOptimisation = true;
       recommendedGzipSettings = false; # Do not buffer or gzip SSE token streams!
 

@@ -16,12 +16,13 @@
       "@wheel"
     ];
 
-    # Binary caches / substituters including ComfyUI and nix-community
+    # Binary caches / substituters including ComfyUI, nix-community, and optional ROCm cache
     extra-substituters = [
       "https://comfyui.cachix.org"
       "https://nix-community.cachix.org"
       "https://cache.nixos-cuda.org"
       "https://numtide.cachix.org"
+      # "https://nixos-rocm.cachix.org"
     ];
 
     extra-trusted-public-keys = [
@@ -29,6 +30,7 @@
       "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
       "cache.nixos-cuda.org:74DUi4Ye579gUqzH4ziL9IyiJBlDpMRn9MBN8oNan9M="
       "numtide.cachix.org-1:psk1bDfU1UhVfiVNyPCxyhR+FtmpNkamWT0DwIK+jic="
+      # "nixos-rocm.cachix.org-1:VEpsf7pRIijjd8csKjFNBGzkBqOmw8H9PRmgAq14LnE="
     ];
 
     auto-optimise-store = true;

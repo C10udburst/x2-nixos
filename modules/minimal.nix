@@ -46,8 +46,12 @@
   hardware.enableRedistributableFirmware = true;
 
   boot.kernelParams = [
-    # Allow AMDGPU/ROCm to map up to 112 GB of the 128 GB unified system RAM as GTT VRAM
-    "amdgpu.gttsize=114688"
+    # Allow AMDGPU/ROCm to map up to 120 GB of the 128 GB unified system RAM as GTT VRAM
+    "amdgpu.gttsize=122880"
+    "ttm.pages_limit=31457280"
+    "ttm.page_pool_size=31457280"
+    "amdttm.pages_limit=31457280"
+    "amdttm.page_pool_size=31457280"
     "panic=10"
     "boot.panic_on_fail"
   ];

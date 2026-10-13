@@ -54,7 +54,9 @@ in {
     security.sudo.extraRules = [
       {
         users = [
+          "gateway"
           "gufo"
+          "llama-cpp"
           "immich-ml"
           "comfyui"
         ];
