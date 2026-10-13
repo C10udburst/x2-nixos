@@ -59,6 +59,9 @@
       "render"
       "networkmanager"
     ];
+    openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE02DyPxJUXXiGSLo9IiqyVDdQ7VoPKxrc5WYGb5QNci miecz@praworzadnyzly.pl"
+    ];
   };
 
   users.users.cloudburst = {
