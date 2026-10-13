@@ -214,11 +214,24 @@ def handle_status():
 
     model_list = []
     for name, mcfg in MODELS.items():
+        btype = mcfg.get("type")
+        if not btype or btype == "unknown":
+            unit = mcfg.get("service_name", "")
+            if unit.startswith("llama-cpp-"):
+                btype = "llama-cpp"
+            elif unit.startswith("gufo-"):
+                btype = "gufo"
+            elif "llama" in unit:
+                btype = "llama-cpp"
+            elif "gufo" in unit:
+                btype = "gufo"
+            else:
+                btype = "custom"
         model_list.append({
             "name": name,
             "alias": mcfg.get("remapped_model", name),
             "description": mcfg.get("description", ""),
-            "backend_type": mcfg.get("type", "unknown"),
+            "backend_type": btype,
             "active": (name == active),
         })
 
@@ -254,6 +267,60 @@ def check_url_health(url_str, timeout=1.0):
     return False
 
 
+def acquire_lock(path):
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
+    except PermissionError:
+        fd = os.open(path, os.O_RDONLY)
+    try:
+        os.chmod(path, 0o666)
+    except Exception:
+        pass
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def release_lock(fd):
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+
+
+def set_state_file(path, content):
+    """Safely write state file, handling existing file ownership and cross-user permissions."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        try:
+            os.chmod(path, 0o666)
+        except Exception:
+            pass
+        return
+    except PermissionError:
+        pass
+    except Exception as e:
+        sys.stderr.write(f"Direct write to {path} failed: {e}\n")
+
+    # In 0777 directory, if writing to an existing 0644 foreign-owned file failed,
+    # unlinking and recreating succeeds cleanly
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        try:
+            os.chmod(path, 0o666)
+        except Exception:
+            pass
+    except Exception as e:
+        sys.stderr.write(f"Recreation of {path} failed: {e}\n")
+
+
 def handle_switch(body):
     target = None
     if body:
@@ -271,64 +338,61 @@ def handle_switch(body):
         sys.stdout.buffer.flush()
         return
 
-    with open(LOCK_FILE, "w") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            mcfg = MODELS[target]
-            target_unit = mcfg.get("service_name", f"model-{target}.service")
-            target_url = mcfg.get("url", "http://127.0.0.1:8081")
+    lock_fd = acquire_lock(LOCK_FILE)
+    try:
+        mcfg = MODELS[target]
+        target_unit = mcfg.get("service_name", f"model-{target}.service")
+        target_url = mcfg.get("url", "http://127.0.0.1:8081")
 
-            # Stop all other exclusive heavy workloads calculated at eval time
-            for unit in ALL_EXCLUSIVE_UNITS:
-                if unit != target_unit:
-                    run_systemctl("stop", unit)
+        # Stop all other exclusive heavy workloads calculated at eval time
+        for unit in ALL_EXCLUSIVE_UNITS:
+            if unit != target_unit:
+                run_systemctl("stop", unit)
 
-            ok, out, err = run_systemctl("start", target_unit)
-            if not ok:
-                send_headers(status="500 Internal Server Error")
-                sys.stdout.buffer.write(json.dumps({"error": err or out}).encode("utf-8"))
-                sys.stdout.buffer.flush()
-                return
-
-            deadline = time.time() + 90
-            ready = False
-            while time.time() < deadline:
-                if check_url_health(target_url):
-                    ready = True
-                    break
-                time.sleep(0.2)
-
-            if ready:
-                with open(STATE_FILE, "w", encoding="utf-8") as f:
-                    f.write(target)
-                send_headers()
-                sys.stdout.buffer.write(json.dumps({"status": "switched", "active_model": target}).encode("utf-8"))
-            else:
-                send_headers(status="504 Gateway Timeout")
-                sys.stdout.buffer.write(json.dumps({"error": "Model startup timed out"}).encode("utf-8"))
+        ok, out, err = run_systemctl("start", target_unit)
+        if not ok:
+            send_headers(status="500 Internal Server Error")
+            sys.stdout.buffer.write(json.dumps({"error": err or out}).encode("utf-8"))
             sys.stdout.buffer.flush()
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            return
+
+        deadline = time.time() + 90
+        ready = False
+        while time.time() < deadline:
+            if check_url_health(target_url):
+                ready = True
+                break
+            time.sleep(0.2)
+
+        if ready:
+            set_state_file(STATE_FILE, target)
+            send_headers()
+            sys.stdout.buffer.write(json.dumps({"status": "switched", "active_model": target}).encode("utf-8"))
+        else:
+            send_headers(status="504 Gateway Timeout")
+            sys.stdout.buffer.write(json.dumps({"error": "Model startup timed out"}).encode("utf-8"))
+        sys.stdout.buffer.flush()
+    finally:
+        release_lock(lock_fd)
 
 
 def handle_stop():
-    with open(LOCK_FILE, "w") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            # Stop all exclusive heavy workloads calculated at eval time
-            for unit in ALL_EXCLUSIVE_UNITS:
-                run_systemctl("stop", unit)
+    lock_fd = acquire_lock(LOCK_FILE)
+    try:
+        # Stop all exclusive heavy workloads calculated at eval time
+        for unit in ALL_EXCLUSIVE_UNITS:
+            run_systemctl("stop", unit)
 
-            if os.path.exists(STATE_FILE):
-                try:
-                    os.remove(STATE_FILE)
-                except Exception:
-                    pass
-            send_headers()
-            sys.stdout.buffer.write(json.dumps({"status": "stopped"}).encode("utf-8"))
-            sys.stdout.buffer.flush()
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        if os.path.exists(STATE_FILE):
+            try:
+                os.remove(STATE_FILE)
+            except Exception:
+                pass
+        send_headers()
+        sys.stdout.buffer.write(json.dumps({"status": "stopped"}).encode("utf-8"))
+        sys.stdout.buffer.flush()
+    finally:
+        release_lock(lock_fd)
 
 
 def main():
@@ -344,15 +408,21 @@ def main():
     content_length = int(os.environ.get("CONTENT_LENGTH", 0) or 0)
     body = sys.stdin.buffer.read(content_length) if content_length > 0 else b""
 
-    if clean_path in ("/api/status", "/status"):
-        handle_status()
-    elif clean_path in ("/api/switch", "/switch") and method == "POST":
-        handle_switch(body)
-    elif clean_path in ("/api/stop", "/stop") and method == "POST":
-        handle_stop()
-    else:
-        send_headers(status="404 Not Found")
-        sys.stdout.buffer.write(json.dumps({"error": f"API endpoint '{clean_path}' not found"}).encode("utf-8"))
+    try:
+        if clean_path in ("/api/status", "/status"):
+            handle_status()
+        elif clean_path in ("/api/switch", "/switch") and method == "POST":
+            handle_switch(body)
+        elif clean_path in ("/api/stop", "/stop") and method == "POST":
+            handle_stop()
+        else:
+            send_headers(status="404 Not Found")
+            sys.stdout.buffer.write(json.dumps({"error": f"API endpoint '{clean_path}' not found"}).encode("utf-8"))
+            sys.stdout.buffer.flush()
+    except Exception as e:
+        sys.stderr.write(f"API Error in {clean_path}: {e}\n")
+        send_headers(status="500 Internal Server Error")
+        sys.stdout.buffer.write(json.dumps({"error": str(e)}).encode("utf-8"))
         sys.stdout.buffer.flush()
 
 

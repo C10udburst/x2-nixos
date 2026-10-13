@@ -126,7 +126,7 @@ in {
         ];
 
         ExecStartPre = [
-          "/bin/sh -c '${pkgs.coreutils}/bin/echo immich-machine-learning > /run/model-lock/active_model'"
+          "/bin/sh -c '${pkgs.coreutils}/bin/echo immich-machine-learning > /run/model-lock/active_model && ${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_model'"
         ];
         ExecStart = "${cfg.package}/bin/machine-learning";
         ExecStopPost = [

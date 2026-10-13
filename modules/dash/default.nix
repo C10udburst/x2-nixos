@@ -48,6 +48,7 @@
       remapped_model = m.remappedModel;
       url = m.url;
       description = m.description;
+      type = m.type;
     }) config.services.models;
   };
 
@@ -95,7 +96,7 @@
     export MODELS_CONFIG_PATH="${modelsJsonFile}"
     export SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
     export STOP_OTHER_WORKLOADS="${config.services.workload-manager.stopScript}"
-    exec ${./switcher.sh} "$@"
+    exec ${pkgs.bash}/bin/bash ${./switcher.sh} "$@"
   '';
 in {
   imports = [

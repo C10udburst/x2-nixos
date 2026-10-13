@@ -104,6 +104,7 @@
   '';
 in {
   serviceName = "gufo-${modelId}.service";
+  type = "gufo";
   inherit remappedModel description;
   url = "http://127.0.0.1:${toString port}";
 
@@ -127,7 +128,7 @@ in {
       ];
 
       ExecStartPre = [
-        "/bin/sh -c '${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_model'"
+        "/bin/sh -c '${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_model && ${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_model'"
       ];
       ExecStart = "${launcher}";
       ExecStopPost = [

@@ -63,6 +63,7 @@ Every model entry in `services.models` MUST adhere to the following attribute sc
   url,             # String: HTTP loopback URL (e.g. "http://127.0.0.1:8081")
   systemdService,  # AttrSet: standard NixOS systemd.services unit configuration
   description,     # (Optional) String: human-readable description for dashboard (default: "")
+  type,            # (Optional) String: engine identifier ("gufo" | "llama-cpp")
 }
 ```
 

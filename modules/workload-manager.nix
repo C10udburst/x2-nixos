@@ -77,9 +77,11 @@ in {
       }
     ];
 
-    # Model lock directory
+    # Model lock directory and shared state files
     systemd.tmpfiles.rules = [
       "d /run/model-lock 0777 root root - -"
+      "f /run/model-lock/model.lock 0666 root root - -"
+      "f /run/model-lock/active_model 0666 root root - -"
     ];
 
     # Mutual systemd Conflicts across ALL exclusive units

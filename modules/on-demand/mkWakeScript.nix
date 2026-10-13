@@ -19,6 +19,7 @@ pkgs.writeShellScript "wake-netcat-${workloadId}" ''
 
   # 1. Acquire independent workload lock
   exec 9>"$LOCK_FILE"
+  chmod 666 "$LOCK_FILE" 2>/dev/null || true
   flock -x 9
 
   # 2. Check if already the active workload
@@ -37,6 +38,7 @@ pkgs.writeShellScript "wake-netcat-${workloadId}" ''
       if ${healthCheckCmd}; then
         READY=1
         echo "${workloadId}" > "$STATE_FILE"
+        chmod 666 "$STATE_FILE" 2>/dev/null || true
         break
       fi
       sleep 0.2

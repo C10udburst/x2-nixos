@@ -44,6 +44,11 @@ in {
               default = "";
               description = "Human-readable description for dashboard.";
             };
+            type = lib.mkOption {
+              type = lib.types.str;
+              default = "gufo";
+              description = "Backend inference engine type (e.g. gufo, llama-cpp).";
+            };
             systemdService = lib.mkOption {
               type = lib.types.attrs;
               description = "NixOS systemd.services unit configuration.";

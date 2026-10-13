@@ -63,6 +63,7 @@ if [ -f "$STATE_FILE" ]; then
 fi
 
 exec 9>"$LOCK_FILE"
+chmod 666 "$LOCK_FILE" 2>/dev/null || true
 
 # 5. Check if service is active; dynamic switch if needed
 SERVICE_ACTIVE=0
@@ -81,6 +82,7 @@ if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
     SERVICE_ACTIVE=0
   fi
 
+  if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
     # Stop any other active heavy workloads using eval-time generated stop script
     if [ -n "${STOP_OTHER_WORKLOADS:-}" ] && [ -x "${STOP_OTHER_WORKLOADS:-}" ]; then
       "$STOP_OTHER_WORKLOADS" "$TARGET_SERVICE"
@@ -95,6 +97,7 @@ if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
            curl -s -f "${TARGET_URL}/v1/models" >/dev/null 2>&1 || \
            curl -s -f "${TARGET_URL}/" >/dev/null 2>&1; then
           echo "$REQ_MODEL" > "$STATE_FILE"
+          chmod 666 "$STATE_FILE" 2>/dev/null || true
           READY=1
           break
         fi

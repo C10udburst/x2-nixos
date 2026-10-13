@@ -166,7 +166,7 @@ in {
         ];
 
         ExecStartPre = [
-          "/bin/sh -c '${pkgs.coreutils}/bin/echo comfyui > /run/model-lock/active_model'"
+          "/bin/sh -c '${pkgs.coreutils}/bin/echo comfyui > /run/model-lock/active_model && ${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_model'"
         ];
         ExecStart = "${launcher}";
         ExecStopPost = [
