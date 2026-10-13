@@ -28,7 +28,7 @@ fi
 # 3. Model detection using jq (hot path)
 REQ_MODEL=""
 if [ -n "$BODY" ]; then
-  REQ_MODEL=$(echo "$BODY" | jq -r '.model // empty' 2>/dev/null || true)
+  REQ_MODEL=$(printf '%s' "$BODY" | jq -r '.model // empty' 2>/dev/null || true)
 fi
 
 # Fallback to default_model or currently active model
@@ -134,8 +134,8 @@ if ! curl -s -f "${TARGET_URL}/health" >/dev/null 2>&1 && \
 fi
 
 # 7. Remap model ID in request body before forwarding (Rule 2)
-if [ -n "$BODY" ] && [ -n "$REMAPPED_MODEL" ]; then
-  BODY=$(echo "$BODY" | jq -c --arg m "$REMAPPED_MODEL" 'if has("model") then .model = $m else . end' 2>/dev/null || echo "$BODY")
+if [ -n "$BODY" ] && [ -n "$REMAPPED_MODEL" ] && [ "$REMAPPED_MODEL" != "$REQ_MODEL" ]; then
+  BODY=$(printf '%s' "$BODY" | jq -c --arg m "$REMAPPED_MODEL" 'if has("model") then .model = $m else . end' 2>/dev/null || printf '%s' "$BODY")
 fi
 
 # 8. Stream request directly to target backend URL using curl
@@ -153,13 +153,19 @@ fi
 if [ -n "${HTTP_AUTHORIZATION:-}" ]; then
   CURL_ARGS+=(-H "Authorization: $HTTP_AUTHORIZATION")
 fi
-if [ -n "$BODY" ]; then
-  CURL_ARGS+=(--data-binary "$BODY")
-fi
 
 # Transform first HTTP header into FastCGI Status line, inject CORS + no-buffer, and stream
-exec curl "${CURL_ARGS[@]}" \
-  | sed -u \
-      -e '1s|^HTTP/[0-9.]* |Status: |' \
-      -e '1a Access-Control-Allow-Origin: *\
+if [ -n "$BODY" ]; then
+  CURL_ARGS+=(--data-binary @-)
+  printf '%s' "$BODY" | curl "${CURL_ARGS[@]}" \
+    | sed -u \
+        -e '1s|^HTTP/[0-9.]* |Status: |' \
+        -e '1a Access-Control-Allow-Origin: *\
 X-Accel-Buffering: no'
+else
+  curl "${CURL_ARGS[@]}" \
+    | sed -u \
+        -e '1s|^HTTP/[0-9.]* |Status: |' \
+        -e '1a Access-Control-Allow-Origin: *\
+X-Accel-Buffering: no'
+fi

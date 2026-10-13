@@ -171,6 +171,9 @@ in {
             port = cfg.port;
           }
         ];
+        extraConfig = ''
+          client_max_body_size 0;
+        '';
 
         # 1. Static dashboard HTML (wire speed)
         locations."/" = {
@@ -219,7 +222,8 @@ in {
             fastcgi_buffering off;
             fastcgi_read_timeout 600s;
             fastcgi_send_timeout 600s;
-            client_max_body_size 100M;
+            client_body_timeout 600s;
+            client_max_body_size 0;
           '';
         };
       };
