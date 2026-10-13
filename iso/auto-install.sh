@@ -87,7 +87,7 @@ nixos-install --no-root-passwd --flake "${WORK_DIR}#evo-x2"
 # 6. Set password for user 'miecz' in /mnt
 echo -e "${BLUE}==>${NC} Setting password for user 'miecz'..."
 # Set user password inside target system
-nixos-enter -- root -c "echo 'miecz:${PASS_1}' | chpasswd"
+nixos-enter -c "echo 'miecz:${PASS_1}' | chpasswd"
 
 # 7. Clone repo to /etc/nixos/configuration and configure nixconfig permissions
 echo -e "${BLUE}==>${NC} Setting up /etc/nixos/configuration editable by 'nixconfig' group..."
@@ -102,7 +102,7 @@ if [ -n "${NIXCONFIG_GID}" ]; then
   chown -R "root:${NIXCONFIG_GID}" "${TARGET_CONF}"
 else
   # Fallback to group name inside nixos-enter
-  nixos-enter -- root -c "chown -R root:nixconfig /etc/nixos/configuration" || true
+  nixos-enter -c "chown -R root:nixconfig /etc/nixos/configuration" || true
 fi
 chmod -R g+rwX "${TARGET_CONF}"
 chmod g+s "${TARGET_CONF}"
