@@ -24,12 +24,28 @@
     description = "claude-code";
     extraGroups = [
       "nixconfig"
+      "wheel"
       "video"
       "render"
       "networkmanager"
     ];
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF+3Fo6wnn+MCd411dP8dUcJ6G7Y3xRU7RMUy3h/ZNvi claude-code@amadeusz->llm-x2"
+    ];
+  };
+
+  users.users.antigravity = {
+    isNormalUser = true;
+    description = "antigravity";
+    extraGroups = [
+      "nixconfig"
+      "wheel"
+      "video"
+      "render"
+      "networkmanager"
+    ];
+    openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP6pd6jYj2+dnTzamtXJTmoPx7ECi8vaJsc19EpI4jFV antigravity@amadeusz->llm-x2"
     ];
   };
 
