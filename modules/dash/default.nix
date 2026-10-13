@@ -92,6 +92,7 @@
       pkgs.gnused
       pkgs.coreutils
       pkgs.systemd
+      pkgs.util-linux
     ]}:$PATH"
     export MODELS_CONFIG_PATH="${modelsJsonFile}"
     export SYSTEMCTL="${pkgs.systemd}/bin/systemctl"

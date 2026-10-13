@@ -161,6 +161,21 @@ in {
         threads = 16;
         jinja = true;
       };
+
+      # 5. Liquid AI LFM2.5-8B-A1B (hybrid conv/attention MoE, 1.5B active params)
+      "lfm2.5-8b-a1b" = mkLlamaCpp {
+        modelId = "lfm2.5-8b-a1b";
+        description = "LFM2.5 8B A1B (Q4_K_M) - fast MoE chat/coder, 1.5B active params";
+        modelPath = "lfm2.5-8b-a1b/LFM2.5-8B-A1B-Q4_K_M.gguf";
+        context = 131072;
+        cacheTypeK = "q8_0";
+        cacheTypeV = "q8_0";
+        gpuLayers = 99;
+        parallel = 1;
+        flashAttention = true;
+        threads = 16;
+        jinja = true;
+      };
     };
   };
 }
