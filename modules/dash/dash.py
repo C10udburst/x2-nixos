@@ -74,13 +74,14 @@ def get_active_workload():
         except Exception:
             pass
 
-    # 2. Check standalone / on-demand registered services
+    # 2. Check standalone / on-demand heavy services (never gateway reverse proxy)
     for svc in SERVICES:
-        unit = svc.get("unit")
-        if unit:
-            ok, out, _ = run_systemctl("is-active", unit)
-            if ok and out == "active":
-                return svc.get("id")
+        if svc.get("type") == "on-demand":
+            unit = svc.get("unit")
+            if unit:
+                ok, out, _ = run_systemctl("is-active", unit)
+                if ok and out == "active":
+                    return svc.get("id")
 
     # 3. Check registered models
     for name, mcfg in MODELS.items():

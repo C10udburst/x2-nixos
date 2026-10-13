@@ -1,12 +1,14 @@
 <!doctype html>
 <html lang="en" data-theme="dark">
+
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>EVO-X2 • AI Inference Dashboard</title>
-  <link href="https://cdn.jsdelivr.net/npm/daisyui@latest/dist/full.min.css" rel="stylesheet" type="text/css"/>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@latest/dist/full.min.css" rel="stylesheet" type="text/css" />
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
+
 <body class="bg-base-300 min-h-screen text-base-content p-4 md:p-8">
   <div class="max-w-6xl mx-auto space-y-6">
 
@@ -84,9 +86,11 @@
     <div class="card bg-base-200 border-l-4 border-primary shadow p-5">
       <div class="flex flex-wrap justify-between items-center gap-4">
         <div>
-          <span class="text-xs font-semibold uppercase text-base-content/60">Current Active Workload (Single Workload in VRAM)</span>
+          <span class="text-xs font-semibold uppercase text-base-content/60">Current Active Workload (Single Workload in
+            VRAM)</span>
           <div class="text-xl font-bold font-mono text-primary mt-1" id="active-title">None (Idle)</div>
-          <p class="text-xs text-base-content/60 mt-1" id="active-desc">Ready to launch model or Immich ML on request.</p>
+          <p class="text-xs text-base-content/60 mt-1" id="active-desc">Ready to launch model or Immich ML on request.
+          </p>
         </div>
         <button id="btn-unload" class="btn btn-error btn-outline btn-sm" onclick="unloadActive()" disabled>
           Unload Workload
@@ -109,19 +113,19 @@
     <div class="card bg-base-200 shadow space-y-4 p-5">
       <div class="flex justify-between items-center">
         <h2 class="text-lg font-bold">Interactive Inference Playground</h2>
-        <span class="text-xs text-base-content/60">Target: <code id="playground-target" class="text-primary font-bold">auto</code></span>
+        <span class="text-xs text-base-content/60">Target: <code id="playground-target"
+            class="text-primary font-bold">auto</code></span>
       </div>
-      <textarea id="prompt-input" class="textarea textarea-bordered w-full h-24 text-sm" placeholder="Ask anything to test SSE streaming inference...">Explain how unified memory on AMD Ryzen AI Max+ 395 eliminates PCIe bandwidth bottlenecks.</textarea>
+      <textarea id="prompt-input" class="textarea textarea-bordered w-full h-24 text-sm"
+        placeholder="Ask anything to test SSE streaming inference...">Explain how unified memory on AMD Ryzen AI Max+ 395 eliminates PCIe bandwidth bottlenecks.</textarea>
       <div class="flex justify-end gap-2">
         <button class="btn btn-ghost btn-sm" onclick="clearPlayground()">Clear</button>
         <button id="btn-send" class="btn btn-primary btn-sm" onclick="sendInference()">Generate Stream</button>
       </div>
-      <div id="stream-output" class="bg-base-300 p-4 rounded-box font-mono text-xs min-h-[80px] max-h-96 overflow-y-auto">
-        <div id="stream-reasoning" class="hidden mb-3 p-3 bg-base-200/90 border-l-2 border-warning rounded text-warning/90 whitespace-pre-wrap">
-          <div class="text-[10px] uppercase font-bold text-warning/70 mb-1 flex items-center gap-1.5">
-            <span class="inline-block w-1.5 h-1.5 rounded-full bg-warning animate-pulse"></span>
-            Reasoning Trace
-          </div>
+      <div id="stream-output"
+        class="bg-base-300 p-4 rounded-box font-mono text-xs min-h-[80px] max-h-96 overflow-y-auto">
+        <div id="stream-reasoning"
+          class="hidden mb-3 p-3 bg-base-200/90 border-l-2 border-warning rounded text-warning/90 whitespace-pre-wrap">
           <div id="stream-reasoning-text"></div>
         </div>
         <div id="stream-content" class="text-info whitespace-pre-wrap">Output will stream here...</div>
@@ -173,7 +177,16 @@
         const vramUsed = (data.gpu.vram_used_mb / 1024).toFixed(1);
         const vramTot = (data.gpu.vram_total_mb / 1024).toFixed(1);
         const gttUsed = (data.gpu.gtt_used_mb / 1024).toFixed(1);
-        if (data.gpu.vram_total_mb > 0) {
+        const gttTot = ((data.gpu.gtt_total_mb || 122880) / 1024).toFixed(1);
+
+        // On APUs (Ryzen AI Max+ unified memory), GTT is the primary GPU VRAM allocation pool
+        if (data.gpu.gtt_total_mb > 0) {
+          const gttPct = Math.round((data.gpu.gtt_used_mb / data.gpu.gtt_total_mb) * 100);
+          document.getElementById('vram-val').textContent = `${gttUsed} GB`;
+          document.getElementById('vram-sub').textContent = `Unified GTT: ${gttUsed}/${gttTot} GB (VRAM: ${vramUsed} GB)`;
+          document.getElementById('vram-pct').textContent = `${gttPct}%`;
+          document.getElementById('vram-bar').value = gttPct;
+        } else if (data.gpu.vram_total_mb > 0) {
           const pct = Math.round((data.gpu.vram_used_mb / data.gpu.vram_total_mb) * 100);
           document.getElementById('vram-val').textContent = `${vramUsed} GB`;
           document.getElementById('vram-sub').textContent = `VRAM: ${vramUsed}/${vramTot} GB | GTT: ${gttUsed} GB`;
@@ -234,6 +247,7 @@
       renderModels();
     }
 
+    let lastFooterSig = '';
     function renderFooterServices(services) {
       const footerEl = document.getElementById('footer-services');
       if (!footerEl) return;
@@ -241,6 +255,10 @@
         footerEl.innerHTML = '<span class="text-xs text-base-content/40">No defined services.</span>';
         return;
       }
+
+      const currentSig = services.map(s => `${s.id}:${s.status}:${s.port}`).join('|');
+      if (currentSig === lastFooterSig) return;
+      lastFooterSig = currentSig;
 
       footerEl.innerHTML = services.map(s => {
         const isAct = s.status === 'active';
@@ -265,38 +283,103 @@
       }).join('');
     }
 
+    let lastModelsSig = '';
+    let lastActiveModel = null;
+    let lastSwitching = false;
+
     function renderModels() {
       const container = document.getElementById('models-list');
+      if (!container) return;
       if (!state.models || state.models.length === 0) {
         container.innerHTML = `<div class="card bg-base-200 p-6 text-center text-base-content/60">No models found in registry.</div>`;
+        lastModelsSig = '';
         return;
       }
 
-      container.innerHTML = state.models.map(m => {
+      const currentModelsSig = state.models.map(m => `${m.name}:${m.backend_type}:${m.alias}`).join('|');
+
+      // 1. If model definitions changed or initial render, build the DOM cards
+      if (currentModelsSig !== lastModelsSig || container.children.length !== state.models.length) {
+        lastModelsSig = currentModelsSig;
+        lastActiveModel = state.active;
+        lastSwitching = state.switching;
+
+        container.innerHTML = state.models.map(m => {
+          const isActive = (m.name === state.active);
+          return `
+            <div id="model-card-${m.name}" class="card bg-base-200 shadow border ${isActive ? 'border-success' : 'border-base-100'} p-5 flex flex-col justify-between">
+              <div class="space-y-2">
+                <div class="flex justify-between items-start gap-2">
+                  <span class="font-bold font-mono text-sm break-all">${m.name}</span>
+                  <span id="badge-active-${m.name}" class="badge badge-success badge-sm font-semibold ${isActive ? '' : 'hidden'}">ACTIVE</span>
+                </div>
+                <p class="text-xs text-base-content/70 line-clamp-2">${m.description || 'No description'}</p>
+                <div class="flex flex-wrap gap-1">
+                  <span class="badge badge-outline badge-xs uppercase font-mono">${m.backend_type || 'custom'}</span>
+                  <span class="badge badge-ghost badge-xs font-mono">alias: ${m.alias}</span>
+                </div>
+              </div>
+              <div class="mt-4">
+                <button id="btn-model-${m.name}"
+                  class="btn ${isActive ? 'btn-success btn-outline' : 'btn-primary'} btn-sm w-full no-animation"
+                  onclick="switchModel('${m.name}')"
+                  ${isActive || state.switching ? 'disabled' : ''}>
+                  ${isActive ? '✓ Loaded in VRAM' : (state.switching ? 'Switching...' : 'Switch Model')}
+                </button>
+              </div>
+            </div>
+          `;
+        }).join('');
+        return;
+      }
+
+      // 2. If nothing changed, do not touch the DOM at all (no animation/flicker)
+      if (lastActiveModel === state.active && lastSwitching === state.switching) {
+        return;
+      }
+
+      // 3. If only active state or switching state changed, update existing elements in-place
+      lastActiveModel = state.active;
+      lastSwitching = state.switching;
+
+      state.models.forEach(m => {
         const isActive = (m.name === state.active);
-        return `
-          <div class="card bg-base-200 shadow border ${isActive ? 'border-success' : 'border-base-100'} p-5 flex flex-col justify-between">
-            <div class="space-y-2">
-              <div class="flex justify-between items-start gap-2">
-                <span class="font-bold font-mono text-sm break-all">${m.name}</span>
-                ${isActive ? '<span class="badge badge-success badge-sm font-semibold">ACTIVE</span>' : ''}
-              </div>
-              <p class="text-xs text-base-content/70 line-clamp-2">${m.description || 'No description'}</p>
-              <div class="flex flex-wrap gap-1">
-                <span class="badge badge-outline badge-xs uppercase font-mono">${m.backend_type || 'custom'}</span>
-                <span class="badge badge-ghost badge-xs font-mono">alias: ${m.alias}</span>
-              </div>
-            </div>
-            <div class="mt-4">
-              <button class="btn ${isActive ? 'btn-success btn-outline' : 'btn-primary'} btn-sm w-full"
-                onclick="switchModel('${m.name}')"
-                ${isActive || state.switching ? 'disabled' : ''}>
-                ${isActive ? '✓ Loaded in VRAM' : (state.switching ? 'Switching...' : 'Switch Model')}
-              </button>
-            </div>
-          </div>
-        `;
-      }).join('');
+        const card = document.getElementById(`model-card-${m.name}`);
+        const badge = document.getElementById(`badge-active-${m.name}`);
+        const btn = document.getElementById(`btn-model-${m.name}`);
+
+        if (card) {
+          const expectedBorder = isActive ? 'border-success' : 'border-base-100';
+          if (!card.classList.contains(expectedBorder)) {
+            card.classList.remove('border-success', 'border-base-100');
+            card.classList.add(expectedBorder);
+          }
+        }
+
+        if (badge) {
+          if (isActive && badge.classList.contains('hidden')) {
+            badge.classList.remove('hidden');
+          } else if (!isActive && !badge.classList.contains('hidden')) {
+            badge.classList.add('hidden');
+          }
+        }
+
+        if (btn) {
+          const btnText = isActive ? '✓ Loaded in VRAM' : (state.switching ? 'Switching...' : 'Switch Model');
+          const shouldDisable = isActive || state.switching;
+
+          if (btn.textContent !== btnText) btn.textContent = btnText;
+          if (btn.disabled !== shouldDisable) btn.disabled = shouldDisable;
+
+          if (isActive) {
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-success', 'btn-outline');
+          } else {
+            btn.classList.remove('btn-success', 'btn-outline');
+            btn.classList.add('btn-primary');
+          }
+        }
+      });
     }
 
     async function switchModel(name) {
@@ -436,7 +519,7 @@
                   }
                 }
                 out.scrollTop = out.scrollHeight;
-              } catch (_) {}
+              } catch (_) { }
             }
           }
         }
@@ -452,4 +535,5 @@
     setInterval(fetchStatus, 2500);
   </script>
 </body>
+
 </html>

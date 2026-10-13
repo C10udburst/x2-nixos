@@ -105,6 +105,8 @@ in {
       after = ["network.target"];
 
       environment = {
+        IMMICH_HOST = "127.0.0.1";
+        IMMICH_PORT = toString cfg.backendPort;
         MACHINE_LEARNING_HOST = "127.0.0.1";
         MACHINE_LEARNING_PORT = toString cfg.backendPort;
         MACHINE_LEARNING_CACHE_FOLDER = cfg.cacheDir;
