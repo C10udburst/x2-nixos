@@ -52,7 +52,10 @@
   };
 
   modelsJsonFile = pkgs.writeText "models-registry.json" (builtins.toJSON modelsConfig);
-  dashboardHtmlFile = ./dashboard.html;
+  dashboardDir = pkgs.runCommand "dashboard-dir" {} ''
+    mkdir -p $out
+    cp ${./dashboard.html} $out/index.html
+  '';
 
   # Classic OpenAI /v1/models payload generated at Nix eval time
   openaiModelsJson = {
@@ -138,18 +141,9 @@ in {
         ];
 
         # 1. Static dashboard HTML (wire speed)
-        locations."= /" = {
-          alias = "${dashboardHtmlFile}";
-          extraConfig = ''
-            default_type text/html;
-          '';
-        };
-
-        locations."= /index.html" = {
-          alias = "${dashboardHtmlFile}";
-          extraConfig = ''
-            default_type text/html;
-          '';
+        locations."/" = {
+          root = "${dashboardDir}";
+          index = "index.html";
         };
 
         # 2. Classic OpenAI /v1/models endpoint served statically at wire speed
