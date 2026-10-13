@@ -2,18 +2,27 @@
   config,
   lib,
   pkgs,
-  inputs ? {},
+  inputs ? { },
   ...
-}: let
-  mkGufo = import ./gufo/mkGufo.nix {inherit pkgs lib config inputs;};
-  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix {inherit pkgs lib config;};
-in {
+}:
+let
+  mkGufo = import ./gufo/mkGufo.nix {
+    inherit
+      pkgs
+      lib
+      config
+      inputs
+      ;
+  };
+  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix { inherit pkgs lib config; };
+in
+{
   imports = [
     ./workload-manager.nix
     ./gufo
     ./llama-cpp
     ./immich
-    ./comfyui
+    #./comfyui
   ];
 
   options.services = {
@@ -56,7 +65,7 @@ in {
           };
         }
       );
-      default = {};
+      default = { };
       description = "Global map of model_id -> { serviceName, remappedModel, url, systemdService, ... }";
     };
   };
@@ -67,16 +76,20 @@ in {
     };
 
     # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
-    systemd.services =
-      lib.mapAttrs' (_: m: let
+    systemd.services = lib.mapAttrs' (
+      _: m:
+      let
         unitAttr = lib.removeSuffix ".service" m.serviceName;
         otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
       in
-        lib.nameValuePair unitAttr (m.systemdService // {
-          conflicts = (m.systemdService.conflicts or []) ++ otherUnits;
+      lib.nameValuePair unitAttr (
+        m.systemdService
+        // {
+          conflicts = (m.systemdService.conflicts or [ ]) ++ otherUnits;
           wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
-        })
-      ) config.services.models;
+        }
+      )
+    ) config.services.models;
 
     # Global models map definition
     services.models = {
