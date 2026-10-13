@@ -122,12 +122,21 @@ in {
         jinja = true;
       };
 
-      # 4. Example llama.cpp Model (easily add/enable llama.cpp models):
-      # "llama-3.2-3b" = mkLlamaCpp {
-      #   modelId = "llama-3.2-3b";
-      #   description = "Llama 3.2 3B Instruct via llama-server";
-      #   modelPath = "llama-3.2-3b/Llama-3.2-3B-Instruct-Q8_0.gguf";
-      # };
+      # 4. Multimodal OCR: GLM-OCR 0.9B
+      "glm-ocr" = mkLlamaCpp {
+        modelId = "glm-ocr";
+        description = "GLM-OCR 0.9B (Q8_0) - Document OCR";
+        modelPath = "glm-ocr/GLM-OCR-Q8_0.gguf";
+        mmprojPath = "glm-ocr/mmproj-GLM-OCR-Q8_0.gguf";
+        context = 8192;
+        cacheTypeK = "q8_0";
+        cacheTypeV = "q8_0";
+        gpuLayers = 99;
+        parallel = 1;
+        flashAttention = true;
+        threads = 16;
+        jinja = true;
+      };
     };
   };
 }
