@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+  exec sudo "$0" "$@"
+fi
+
 # Visual styling
 RED='\033[0;31m'
 GREEN='\033[0;32m'

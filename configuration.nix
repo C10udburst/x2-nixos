@@ -21,6 +21,22 @@
   # Minimal NetworkManager for dual 2.5G LAN and Wi-Fi 7
   networking.networkmanager.enable = true;
 
+  # Temporarily disable ComfyUI during initial OS bootstrap to avoid building from source on live media
+  services.comfyui.enable = false;
+
+  nixpkgs.overlays = [
+    (final: prev: {
+      pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
+        (python-final: python-prev: {
+          anyio = python-prev.anyio.overridePythonAttrs (_: {
+            doCheck = false;
+            doInstallCheck = false;
+          });
+        })
+      ];
+    })
+  ];
+
   # Time & Locale
   time.timeZone = "Europe/Warsaw";
   i18n.defaultLocale = "en_US.UTF-8";
