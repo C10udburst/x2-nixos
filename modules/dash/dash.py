@@ -54,7 +54,8 @@ def send_headers(status="200 OK", content_type="application/json; charset=utf-8"
 def run_systemctl(action, unit):
     cmd = [SYSTEMCTL, action, unit]
     if os.geteuid() != 0:
-        cmd = ["sudo", "-n"] + cmd
+        sudo_bin = "/run/wrappers/bin/sudo" if os.path.exists("/run/wrappers/bin/sudo") else "sudo"
+        cmd = [sudo_bin, "-n"] + cmd
     try:
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
         return proc.returncode == 0, proc.stdout.strip(), proc.stderr.strip()

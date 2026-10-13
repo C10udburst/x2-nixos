@@ -74,6 +74,10 @@
 
   # Python Dashboard API wrapper
   dashScript = pkgs.writeShellScript "ai-dash-api" ''
+    export PATH="/run/wrappers/bin:${lib.makeBinPath [
+      pkgs.systemd
+      pkgs.coreutils
+    ]}:$PATH"
     export MODELS_CONFIG_PATH="${modelsJsonFile}"
     export SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
     exec ${pkgs.python3}/bin/python3 ${./dash.py} "$@"
@@ -81,7 +85,7 @@
 
   # Ultra-fast Bash + jq Switcher wrapper (hot path for /v1/* inference requests)
   switcherScript = pkgs.writeShellScript "ai-v1-switcher" ''
-    export PATH="${lib.makeBinPath [
+    export PATH="/run/wrappers/bin:${lib.makeBinPath [
       pkgs.jq
       pkgs.curl
       pkgs.gnused
@@ -89,6 +93,7 @@
       pkgs.systemd
     ]}:$PATH"
     export MODELS_CONFIG_PATH="${modelsJsonFile}"
+    export SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
     export STOP_OTHER_WORKLOADS="${config.services.workload-manager.stopScript}"
     exec ${./switcher.sh} "$@"
   '';

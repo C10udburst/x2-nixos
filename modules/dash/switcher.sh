@@ -66,7 +66,7 @@ exec 9>"$LOCK_FILE"
 
 # 5. Check if service is active; dynamic switch if needed
 SERVICE_ACTIVE=0
-if sudo -n systemctl is-active --quiet "$TARGET_SERVICE" 2>/dev/null; then
+if sudo -n "${SYSTEMCTL:-systemctl}" is-active --quiet "$TARGET_SERVICE" 2>/dev/null; then
   SERVICE_ACTIVE=1
 fi
 
@@ -75,7 +75,7 @@ if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
 
   # Re-check under lock
   ACTIVE_MODEL=$(cat "$STATE_FILE" 2>/dev/null || true)
-  if sudo -n systemctl is-active --quiet "$TARGET_SERVICE" 2>/dev/null; then
+  if sudo -n "${SYSTEMCTL:-systemctl}" is-active --quiet "$TARGET_SERVICE" 2>/dev/null; then
     SERVICE_ACTIVE=1
   else
     SERVICE_ACTIVE=0
@@ -87,7 +87,7 @@ if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
     fi
 
     # Start target service (systemd Conflicts automatically stops other models)
-    if sudo -n systemctl start "$TARGET_SERVICE" 2>/dev/null; then
+    if sudo -n "${SYSTEMCTL:-systemctl}" start "$TARGET_SERVICE" 2>/dev/null; then
       DEADLINE=$(( $(date +%s) + 90 ))
       READY=0
       while [ "$(date +%s)" -lt "$DEADLINE" ]; do
