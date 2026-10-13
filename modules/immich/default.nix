@@ -64,6 +64,9 @@ in {
     users.users.immich-ml = {
       isSystemUser = true;
       group = "immich-ml";
+      # hf_xet (huggingface_hub large-file downloads) writes its cache/logs under $HOME;
+      # the default /var/empty is read-only and fails model downloads with EPERM.
+      home = cfg.cacheDir;
       extraGroups = [
         "render"
         "video"

@@ -30,6 +30,10 @@
       pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
         (python-final: python-prev: {
           anyio = python-prev.anyio.overridePythonAttrs (oldAttrs: {
+            disabledTests = (oldAttrs.disabledTests or []) ++ [
+              "test_tls_connectable"
+              "test_contextmanager"
+            ];
             doCheck = false;
             doInstallCheck = false;
           });

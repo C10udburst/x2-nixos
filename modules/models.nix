@@ -20,7 +20,7 @@ in {
     ./gufo
     ./llama-cpp
     ./immich
-    #./comfyui
+    ./comfyui
   ];
 
   options.services = {

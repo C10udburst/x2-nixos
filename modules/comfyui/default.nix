@@ -11,7 +11,20 @@
   comfyuiPkg =
     if cfg.package != null
     then cfg.package
-    else inputs.comfyui-nix.packages.${pkgs.system}.rocm;
+    else
+      let
+        versions = import "${inputs.comfyui-nix}/nix/versions.nix";
+        pythonOverrides = import "${inputs.comfyui-nix}/nix/python-overrides.nix" {
+          inherit pkgs versions;
+          gpuSupport = "rocm";
+        };
+        comfyPackages = import "${inputs.comfyui-nix}/nix/packages.nix" {
+          inherit pkgs versions pythonOverrides;
+          lib = pkgs.lib;
+          gpuSupport = "rocm";
+        };
+      in
+        comfyPackages.default;
 
   launcher = pkgs.writeShellScript "comfyui-launcher" ''
     set -euo pipefail
