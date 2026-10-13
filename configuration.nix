@@ -24,6 +24,9 @@
   # Temporarily disable ComfyUI during initial OS bootstrap to avoid building from source on live media
   services.comfyui.enable = false;
 
+  # Boot with 0 VRAM used until models are downloaded to /srv/models
+  services.defaultModel = null;
+
   nixpkgs.overlays = [
     (final: prev: {
       pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
