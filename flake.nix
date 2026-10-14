@@ -39,9 +39,6 @@
         default = self.nixosConfigurations.evo-x2;
       };
       packages.x86_64-linux = {
-        anyio = self.nixosConfigurations.evo-x2.pkgs.python312Packages.anyio;
-        fsspec = self.nixosConfigurations.evo-x2.pkgs.python312Packages.fsspec;
-        default = self.packages.x86_64-linux.fsspec;
       };
     };
 }

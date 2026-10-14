@@ -44,6 +44,10 @@
             doCheck = false;
             doInstallCheck = false;
           });
+          django = python-prev.django.overridePythonAttrs (oldAttrs: {
+            doCheck = false;
+            doInstallCheck = false;
+          });
         })
       ];
     })
