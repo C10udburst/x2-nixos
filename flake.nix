@@ -38,7 +38,5 @@
         };
         default = self.nixosConfigurations.evo-x2;
       };
-      packages.x86_64-linux = {
-      };
     };
 }

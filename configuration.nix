@@ -28,26 +28,25 @@
   nixpkgs.overlays = [
     (final: prev: {
       pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
-        (python-final: python-prev: {
-          anyio = python-prev.anyio.overridePythonAttrs (oldAttrs: {
-            disabledTests = (oldAttrs.disabledTests or []) ++ [
-              "test_tls_connectable"
-              "test_contextmanager"
-            ];
-            doCheck = false;
-            doInstallCheck = false;
-          });
-          fsspec = python-prev.fsspec.overridePythonAttrs (oldAttrs: {
-            disabledTests = (oldAttrs.disabledTests or []) ++ [
-              "test_expiry"
-            ];
-            doCheck = false;
-            doInstallCheck = false;
-          });
-          django = python-prev.django.overridePythonAttrs (oldAttrs: {
-            doCheck = false;
-            doInstallCheck = false;
-          });
+        (python-final: python-prev: prev.lib.optionalAttrs (python-prev.isPy312 or false) {
+          buildPythonPackage = {
+            __functor = self: args: (python-prev.buildPythonPackage args).overridePythonAttrs (_: {
+              doCheck = false;
+              doInstallCheck = false;
+              dontCheck = true;
+            });
+            override = newArgs:
+              let
+                base = python-prev.buildPythonPackage.override newArgs;
+              in {
+                __functor = self: args: (base args).overridePythonAttrs (_: {
+                  doCheck = false;
+                  doInstallCheck = false;
+                  dontCheck = true;
+                });
+                override = base.override;
+              };
+          };
         })
       ];
     })

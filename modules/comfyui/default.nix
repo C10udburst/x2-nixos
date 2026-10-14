@@ -81,7 +81,7 @@ in {
     package = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = null;
-      description = "ComfyUI ROCm package override. Defaults to comfyui with nixpkgs ROCm overrides.";
+      description = "ComfyUI ROCm package override. Defaults to comfyui-nix.packages.rocm.";
     };
 
     command = lib.mkOption {
