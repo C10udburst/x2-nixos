@@ -17,28 +17,31 @@
     };
   };
 
-  outputs = {
-    self,
-    nixpkgs,
-    gufo,
-    disko,
-    ...
-  } @ inputs: {
-    nixosConfigurations = {
-      evo-x2 = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        specialArgs = {inherit inputs;};
-        modules = [
-          disko.nixosModules.disko
-          ./disko.nix
-          ./configuration.nix
-        ];
+  outputs =
+    {
+      self,
+      nixpkgs,
+      gufo,
+      disko,
+      ...
+    }@inputs:
+    {
+      nixosConfigurations = {
+        evo-x2 = nixpkgs.lib.nixosSystem {
+          system = "x86_64-linux";
+          specialArgs = { inherit inputs; };
+          modules = [
+            disko.nixosModules.disko
+            ./disko.nix
+            ./configuration.nix
+          ];
+        };
+        default = self.nixosConfigurations.evo-x2;
       };
-      default = self.nixosConfigurations.evo-x2;
+      packages.x86_64-linux = {
+        anyio = self.nixosConfigurations.evo-x2.pkgs.python312Packages.anyio;
+        fsspec = self.nixosConfigurations.evo-x2.pkgs.python312Packages.fsspec;
+        default = self.packages.x86_64-linux.fsspec;
+      };
     };
-    packages.x86_64-linux = {
-      anyio = self.nixosConfigurations.evo-x2.pkgs.python312Packages.anyio;
-      default = self.packages.x86_64-linux.anyio;
-    };
-  };
 }

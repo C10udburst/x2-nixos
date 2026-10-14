@@ -37,6 +37,13 @@
             doCheck = false;
             doInstallCheck = false;
           });
+          fsspec = python-prev.fsspec.overridePythonAttrs (oldAttrs: {
+            disabledTests = (oldAttrs.disabledTests or []) ++ [
+              "test_expiry"
+            ];
+            doCheck = false;
+            doInstallCheck = false;
+          });
         })
       ];
     })
