@@ -86,6 +86,7 @@ in {
       socketConfig = {
         ListenStream = toString cfg.port;
         Accept = true;
+        MaxConnections = 256;
       };
     };
 

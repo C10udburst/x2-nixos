@@ -63,5 +63,5 @@ pkgs.writeShellScript "wake-netcat-${workloadId}" ''
   flock -u 9
 
   # 3. Transparently forward incoming connection to backend using netcat
-  exec ${pkgs.netcat-openbsd}/bin/nc 127.0.0.1 "$BACKEND_PORT"
+  exec ${pkgs.netcat-openbsd}/bin/nc -N 127.0.0.1 "$BACKEND_PORT"
 ''
