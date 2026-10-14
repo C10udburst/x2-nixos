@@ -29,6 +29,9 @@
   launcher = pkgs.writeShellScript "comfyui-launcher" ''
     set -euo pipefail
 
+    export LD_PRELOAD="${pkgs.rocmPackages.rocm-runtime}/lib/libhsa-runtime64.so''${LD_PRELOAD:+:$LD_PRELOAD}"
+    export PATH="${pkgs.rocmPackages.rocminfo}/bin:$PATH"
+
     mkdir -p "${cfg.dataDir}"/{models,custom_nodes,input,output}
     cd "${cfg.dataDir}"
 
@@ -155,12 +158,17 @@ in {
       description = "ComfyUI Generative AI Backend Service (ROCm gfx1151)";
       after = ["network.target"];
 
+      path = [
+        pkgs.rocmPackages.rocminfo
+      ];
+
       environment = {
         COMFYUI_HOST = "127.0.0.1";
         COMFYUI_PORT = toString cfg.backendPort;
         # AMD Ryzen AI Max+ 395 (gfx1151 RDNA 3.5 APU) settings
         HSA_OVERRIDE_GFX_VERSION = "11.5.1";
         HIP_VISIBLE_DEVICES = "0";
+        LD_PRELOAD = "${pkgs.rocmPackages.rocm-runtime}/lib/libhsa-runtime64.so";
       } // cfg.environment;
 
       serviceConfig = {
