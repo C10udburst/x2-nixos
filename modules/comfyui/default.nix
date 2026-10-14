@@ -31,6 +31,7 @@
 
     export LD_PRELOAD="${pkgs.rocmPackages.rocm-runtime}/lib/libhsa-runtime64.so''${LD_PRELOAD:+:$LD_PRELOAD}"
     export PATH="${pkgs.rocmPackages.rocminfo}/bin:$PATH"
+    export TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
 
     mkdir -p "${cfg.dataDir}"/{models,custom_nodes,input,output}
     cd "${cfg.dataDir}"
@@ -95,7 +96,10 @@ in {
 
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = ["--preview-method" "auto"];
+      default = [
+        "--preview-method" "auto"
+        "--use-pytorch-cross-attention"
+      ];
       description = "Extra CLI arguments to pass to ComfyUI.";
     };
 
@@ -169,6 +173,7 @@ in {
         HSA_OVERRIDE_GFX_VERSION = "11.5.1";
         HIP_VISIBLE_DEVICES = "0";
         LD_PRELOAD = "${pkgs.rocmPackages.rocm-runtime}/lib/libhsa-runtime64.so";
+        TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL = "1";
       } // cfg.environment;
 
       serviceConfig = {
