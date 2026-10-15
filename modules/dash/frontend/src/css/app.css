@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: halloween --default;
+}
+
+@source "../index.html";
+@source "../js";

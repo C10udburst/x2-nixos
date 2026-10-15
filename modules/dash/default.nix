@@ -49,14 +49,14 @@
       url = m.url;
       description = m.description;
       type = m.type;
+      sessions = m.sessions;
     }) config.services.models;
   };
 
   modelsJsonFile = pkgs.writeText "models-registry.json" (builtins.toJSON modelsConfig);
-  dashboardDir = pkgs.runCommand "dashboard-dir" {} ''
-    mkdir -p $out
-    cp ${./dashboard.html} $out/index.html
-  '';
+
+  # Static frontend (Tailwind 4 + daisyUI 5 + Lightweight Charts), built at build time
+  dashboardFrontend = import ./frontend.nix {inherit pkgs lib;};
 
   # Classic OpenAI /v1/models payload generated at Nix eval time
   openaiModelsJson = {
@@ -100,10 +100,6 @@
     exec ${pkgs.bash}/bin/bash ${./switcher.sh} "$@"
   '';
 in {
-  imports = [
-    ./dashboard.nix
-  ];
-
   options.services.gateway = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -175,13 +171,25 @@ in {
           client_max_body_size 0;
         '';
 
-        # 1. Static dashboard HTML (wire speed)
+        # 1. Static dashboard (index.html is always revalidated)
         locations."/" = {
-          root = "${dashboardDir}";
+          root = "${dashboardFrontend}";
           index = "index.html";
+          extraConfig = ''
+            add_header Cache-Control "no-cache";
+          '';
         };
 
-        # 2. Classic OpenAI /v1/models endpoint served statically at wire speed
+        # 2. Content-hashed frontend assets: cacheable forever
+        locations."^~ /assets/" = {
+          root = "${dashboardFrontend}";
+          tryFiles = "$uri =404";
+          extraConfig = ''
+            add_header Cache-Control "public, max-age=31536000, immutable";
+          '';
+        };
+
+        # 3. Classic OpenAI /v1/models endpoint served statically at wire speed
         locations."= /v1/models" = {
           alias = "${openaiModelsJsonFile}";
           extraConfig = ''
@@ -202,7 +210,7 @@ in {
           '';
         };
 
-        # 3. Python Dashboard API (/api/*) on isolated fastcgi socket
+        # 4. Python Dashboard API (/api/*) on isolated fastcgi socket
         locations."/api/" = {
           extraConfig = ''
             fastcgi_pass unix:/run/fcgiwrap-dash.sock;
@@ -213,7 +221,7 @@ in {
           '';
         };
 
-        # 4. Ultra-fast Bash + jq Model Switcher (/v1/* inference hot path)
+        # 5. Ultra-fast Bash + jq Model Switcher (/v1/* inference hot path)
         locations."/v1/" = {
           extraConfig = ''
             fastcgi_pass unix:/run/fcgiwrap-gateway.sock;

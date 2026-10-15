@@ -1,0 +1,19 @@
+{
+  "name": "evo-x2-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GMKtec EVO-X2 AI inference dashboard frontend (daisyUI 5 + Lightweight Charts)",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "lightweight-charts": "^5.2.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "daisyui": "^5.7.50",
+    "esbuild": "^0.28.2",
+    "tailwindcss": "^4.3.3"
+  }
+}

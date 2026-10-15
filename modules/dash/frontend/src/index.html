@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en" data-theme="halloween">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EVO-X2 • AI Inference Dashboard</title>
+  <meta name="description"
+    content="GMKtec EVO-X2 (Ryzen AI Max+ 395) single-workload AI inference gateway dashboard." />
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
+  <!-- @app-stylesheet -->
+  <!-- @app-script -->
+</head>
+
+<body class="min-h-screen p-4 md:p-8">
+  <div class="mx-auto flex max-w-6xl flex-col gap-6">
+
+    <header class="navbar flex-wrap rounded-box bg-base-200 px-4 py-3 shadow">
+      <div class="navbar-start flex-col items-start gap-1">
+        <h1 class="flex flex-wrap items-center gap-2 text-xl font-bold md:text-2xl">
+          GMKtec EVO-X2
+          <span class="badge badge-neutral font-mono text-xs">Ryzen AI Max+ 395</span>
+        </h1>
+        <p class="text-xs opacity-60">128GB unified LPDDR5X • RDNA 3.5 APU • NixOS</p>
+      </div>
+      <div class="navbar-end">
+        <span id="status-dot" class="status status-lg status-success animate-pulse tooltip tooltip-left"
+          data-tip="API live" role="status" aria-live="polite"></span>
+      </div>
+    </header>
+
+    <!-- Telemetry: one live time-series chart per metric -->
+    <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="System telemetry">
+      <article class="card bg-base-200 shadow" data-metric="ram">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-baseline justify-between gap-2">
+            <h2 class="card-title text-sm font-semibold opacity-70">Unified RAM (128GB)</h2>
+            <output class="font-mono text-sm font-bold" data-value>--</output>
+          </div>
+          <figure class="h-24 w-full" data-chart></figure>
+          <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
+        </div>
+      </article>
+
+      <article class="card bg-base-200 shadow" data-metric="vram">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-baseline justify-between gap-2">
+            <h2 class="card-title text-sm font-semibold opacity-70">VRAM + GTT</h2>
+            <output class="font-mono text-sm font-bold" data-value>--</output>
+          </div>
+          <figure class="h-24 w-full" data-chart></figure>
+          <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
+        </div>
+      </article>
+
+      <article class="card bg-base-200 shadow" data-metric="gpu">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-baseline justify-between gap-2">
+            <h2 class="card-title text-sm font-semibold opacity-70">GPU engine (RDNA 3.5)</h2>
+            <output class="font-mono text-sm font-bold" data-value>--</output>
+          </div>
+          <figure class="h-24 w-full" data-chart></figure>
+          <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
+        </div>
+      </article>
+
+      <article class="card bg-base-200 shadow" data-metric="cpu">
+        <div class="card-body gap-1 p-4">
+          <div class="flex items-baseline justify-between gap-2">
+            <h2 class="card-title text-sm font-semibold opacity-70">CPU load (16c / 32t)</h2>
+            <output class="font-mono text-sm font-bold" data-value>--</output>
+          </div>
+          <figure class="h-24 w-full" data-chart></figure>
+          <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- Active workload (Rule 1: exactly one heavy workload in unified memory) -->
+    <section class="card bg-base-200 shadow">
+      <div class="card-body">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div class="flex flex-col gap-1">
+            <h2 class="card-title text-sm opacity-60">Active workload • single workload in memory</h2>
+            <p id="workload-title" class="font-mono text-xl font-bold text-primary">None (0 GB allocated)</p>
+            <p id="workload-desc" class="text-sm opacity-60">
+              Idle. Ready to launch a model or an on-demand service on the first request.
+            </p>
+          </div>
+          <div class="card-actions">
+            <button id="btn-unload" class="btn btn-error btn-sm" type="button" disabled>Unload workload</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="flex flex-col gap-3">
+      <div class="flex flex-wrap items-end justify-between gap-2">
+        <h2 class="text-lg font-bold">Configured models</h2>
+        <p class="text-xs opacity-60">Automatic hot-swap on inference request</p>
+      </div>
+      <div id="models-list" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <p class="text-sm opacity-60">Loading model registry…</p>
+      </div>
+    </section>
+
+    <section class="card bg-base-200 shadow">
+      <div class="card-body gap-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="card-title text-lg">Inference playground</h2>
+          <p class="text-sm opacity-60">
+            Target: <code id="playground-target" class="font-mono font-bold text-primary">auto</code>
+          </p>
+        </div>
+
+        <textarea id="prompt-input" class="textarea h-28 w-full text-sm"
+          placeholder="Ask anything to test SSE streaming inference…">Explain how unified memory on AMD Ryzen AI Max+ 395 eliminates PCIe bandwidth bottlenecks.</textarea>
+
+        <div class="stats w-full stats-vertical border border-base-300 sm:stats-horizontal">
+          <div class="stat">
+            <div class="stat-title">Prefill</div>
+            <div class="stat-value font-mono text-2xl" id="stat-prefill">--</div>
+            <div class="stat-desc">tokens / s</div>
+          </div>
+          <div class="stat">
+            <div class="stat-title">Inference</div>
+            <div class="stat-value font-mono text-2xl" id="stat-tps">--</div>
+            <div class="stat-desc">tokens / s</div>
+          </div>
+          <div class="stat">
+            <div class="stat-title">TTFT</div>
+            <div class="stat-value font-mono text-2xl" id="stat-ttft">--</div>
+            <div class="stat-desc">ms to first token</div>
+          </div>
+          <div class="stat">
+            <div class="stat-title">Tokens</div>
+            <div class="stat-value font-mono text-2xl" id="stat-tokens">0</div>
+            <div class="stat-desc">generated</div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-2">
+            <button id="btn-clear" class="btn btn-ghost btn-sm" type="button">Clear</button>
+            <button id="btn-send" class="btn btn-primary btn-sm min-w-24" type="button">Generate</button>
+          </div>
+          <p class="font-mono text-xs opacity-40">POST /v1/chat/completions • SSE</p>
+        </div>
+
+        <div id="stream-output" class="min-h-20 max-h-96 overflow-y-auto rounded-box bg-base-300 p-4 font-mono text-xs">
+          <div id="stream-reasoning" class="hidden mb-3 whitespace-pre-wrap border-l-2 border-warning p-3 opacity-80">
+          </div>
+          <div id="stream-content" class="whitespace-pre-wrap opacity-80">Output will stream here…</div>
+        </div>
+      </div>
+    </section>
+
+    <div id="notify" class="alert alert-error hidden" role="alert"></div>
+
+    <footer class="flex flex-col gap-3 border-t border-base-300 pt-4">
+      <div id="service-list" class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm"></div>
+      <p class="text-center text-xs opacity-40">
+        GMKtec EVO-X2 • AMD Ryzen AI Max+ 395 128GB unified memory • dynamic single-workload architecture
+      </p>
+    </footer>
+
+  </div>
+</body>
+
+</html>

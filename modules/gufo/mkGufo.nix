@@ -123,7 +123,7 @@
 in {
   serviceName = "gufo-${modelId}.service";
   type = "gufo";
-  inherit remappedModel description;
+  inherit remappedModel description sessions;
   url = "http://127.0.0.1:${toString port}";
 
   systemdService = {

@@ -233,6 +233,7 @@ def handle_status():
             "alias": mcfg.get("remapped_model", name),
             "description": mcfg.get("description", ""),
             "backend_type": btype,
+            "sessions": mcfg.get("sessions", 1),
             "active": (name == active),
         })
 

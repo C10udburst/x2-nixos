@@ -11,6 +11,7 @@
   description ? "",
   context ? null,
   parallel ? 1,
+  sessions ? parallel,
   flashAttention ? true,
   threads ? 16,
   cacheTypeK ? null,
@@ -58,7 +59,7 @@
       --port "${toString port}"
       -ngl "${toString gpuLayers}"
       --alias "${remappedModel}"
-      -np "${toString parallel}"
+      -np "${toString sessions}"
     )
 
     ${lib.optionalString (threads != null) ''
@@ -78,7 +79,7 @@
     ''}
 
     ${lib.optionalString (context != null) ''
-      ARGS+=(-c "${toString context}")
+      ARGS+=(-c "${toString (context * sessions)}")
     ''}
 
     ${lib.optionalString (cacheTypeK != null) ''
@@ -105,6 +106,7 @@ in {
   serviceName = "llama-cpp-${modelId}.service";
   type = "llama-cpp";
   inherit remappedModel description;
+  sessions = sessions;
   url = "http://127.0.0.1:${toString port}";
 
   systemdService = {

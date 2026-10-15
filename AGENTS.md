@@ -64,6 +64,7 @@ Every model entry in `services.models` MUST adhere to the following attribute sc
   systemdService,  # AttrSet: standard NixOS systemd.services unit configuration
   description,     # (Optional) String: human-readable description for dashboard (default: "")
   type,            # (Optional) String: engine identifier ("gufo" | "llama-cpp")
+  sessions,        # (Optional) Int: maximum concurrent sessions / slots (default: 1)
 }
 ```
 
@@ -135,9 +136,26 @@ Both Immich ML and ComfyUI use the generic `mkWakeScript` helper:
 ## 5. Main Gateway & Dashboard (`modules/dash/`)
 
 The gateway runs on **port 8080**:
-- **`/` & `/index.html`**: Static HTML dashboard with real-time hardware telemetry and live service status indicators in the footer (`modules/dash/dashboard.html`).
-- **`/api/status`**: Dynamic API returning system memory, GPU VRAM & GTT, active workload, models list, and status pills for all defined services (Gateway, Immich ML, ComfyUI).
+- **`/` & `/index.html`**: Static dashboard built from the frontend project (`modules/dash/frontend/`, served from the `modules/dash/frontend.nix` derivation).
+- **`/assets/*`**: Content-hashed JS/CSS bundles, served with `Cache-Control: public, max-age=31536000, immutable`; `index.html` is served with `no-cache` so a rebuild is picked up immediately.
+- **`/api/status`**: Dynamic API returning system memory, GPU VRAM & GTT, active workload, models list, and status for all defined services (Gateway, Immich ML, ComfyUI).
 - **`/v1/*`**: Hot-path Bash + `jq` switcher (`modules/dash/switcher.sh`) with request model remapping and automatic workload unloading.
+
+### Dashboard UI (`modules/dash/frontend/`)
+
+Tailwind CSS 4 + **daisyUI 5** (`data-theme="halloween"`) + **Lightweight Charts™** (TradingView), bundled by esbuild. Zero runtime CDN: everything is bundled into two content-hashed files.
+
+- **Header**: API liveness is a single `status` dot (green = live, red = unreachable, tooltip shows the poll interval).
+- **Telemetry**: four live area charts (Unified RAM, VRAM + GTT, GPU engine load, CPU load). Each 2.5s poll appends one point; a ~10 minute rolling window (240 points) is kept in `sessionStorage` so charts survive reloads. Hovering a chart previews that sample in the card header.
+- **Active workload**: builtin daisyUI `card` (`card-body` / `card-title` / `card-actions`) showing the single workload currently owning unified memory.
+- **Models**: one `card` per registry entry with a `badge badge-neutral` engine chip, a session badge and a hot-swap button.
+- **Service list (footer)**: plain `status` dot + name + clickable port (no nested chips) linking straight to each subsystem.
+- **Playground**: SSE streaming chat with a `stats` block for prefill t/s, decode t/s, TTFT and token count.
+
+### Frontend build
+- `frontend.nix` uses `buildNpmPackage` (`npm ci --offline` against `package-lock.json`, `npmDepsHash` pinned) and produces a plain static directory: `index.html` + `assets/app.<hash>.{js,css}`. Nothing Node-related lands in the runtime closure.
+- Local iteration without Nix: `cd modules/dash/frontend && npm ci && npm run build` (output in `frontend/dist`).
+- After changing `package.json`/`package-lock.json`, refresh `npmDepsHash`: set it to `lib.fakeHash`, build, and copy the reported `got: sha256-…` back in.
 
 ---
 
@@ -154,9 +172,14 @@ The gateway runs on **port 8080**:
     │   └── default.nix         # ComfyUI on-demand service (flake-native)
     ├── dash/
     │   ├── default.nix         # Gateway Nginx, FastCGI, and switcher script
-    │   ├── dashboard.nix       # Dashboard JSON metadata
+    │   ├── frontend.nix        # buildNpmPackage: Tailwind/daisyUI/Lightweight Charts -> static site
+    │   ├── frontend/           # Frontend source (package.json + lockfile pin the toolchain)
+    │   │   ├── build.mjs       # esbuild + Tailwind CLI build, content-hashed asset names
+    │   │   └── src/
+    │   │       ├── index.html  # Markup template (halloween theme, asset markers)
+    │   │       ├── css/app.css # Tailwind entry (@plugin "daisyui" with the halloween theme)
+    │   │       └── js/         # main.js + api, charts, models, playground, services, workload
     │   ├── dash.py             # Telemetry & status Python CGI API
-    │   ├── dashboard.html      # Real-time web UI with service status indicators
     │   └── switcher.sh         # Hot-path /v1/* FastCGI switcher with remapping
     ├── gufo/
     │   ├── default.nix         # Gufo user, permissions, and tmpfiles

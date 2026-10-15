@@ -56,6 +56,11 @@ in {
               default = "gufo";
               description = "Backend inference engine type (e.g. gufo, llama-cpp).";
             };
+            sessions = lib.mkOption {
+              type = lib.types.int;
+              default = 1;
+              description = "Maximum concurrent sessions / slots.";
+            };
             systemdService = lib.mkOption {
               type = lib.types.attrs;
               description = "NixOS systemd.services unit configuration.";
@@ -113,25 +118,25 @@ in {
         speculative = "dflash2";
         dflashModelPath = "qwen3.8-27b/Qwen3.8-27B-DFlash2-Q4_K_M.gguf";
         context = 32768;
-        sessions = 1;
+        sessions = 4;
       };
 
-      # 2. Example Second Model: Qwen 2.5 72B Instruct
+      # 3. Example Second Model: Qwen 2.5 72B Instruct
       "qwen2.5-72b-instruct" = mkLlamaCpp {
         modelId = "qwen2.5-72b-instruct";
         description = "Qwen 2.5 72B Instruct (Q4_K_M) - High reasoning capability";
         modelPath = "qwen2.5-72b-instruct";
-        context = 131072;
+        context = 32768;
         cacheTypeK = "q8_0";
         cacheTypeV = "q8_0";
         gpuLayers = 99;
-        parallel = 1;
+        parallel = 4;
         flashAttention = true;
         threads = 16;
         jinja = true;
       };
 
-      # 3. Example Third Model: DeepSeek R1 Distill Qwen 32B
+      # 4. Example Third Model: DeepSeek R1 Distill Qwen 32B
       "deepseek-r1-distill-qwen-32b" = mkLlamaCpp {
         modelId = "deepseek-r1-distill-qwen-32b";
         description = "DeepSeek R1 Distill Qwen 32B (Q8_0) - Deep reasoning specialist";
@@ -140,13 +145,13 @@ in {
         cacheTypeK = "q8_0";
         cacheTypeV = "q8_0";
         gpuLayers = 99;
-        parallel = 1;
+        parallel = 4;
         flashAttention = true;
         threads = 16;
         jinja = true;
       };
 
-      # 4. Multimodal OCR: GLM-OCR 0.9B
+      # 5. Multimodal OCR: GLM-OCR 0.9B
       "glm-ocr" = mkLlamaCpp {
         modelId = "glm-ocr";
         description = "GLM-OCR 0.9B (Q8_0) - Document OCR";
@@ -156,13 +161,13 @@ in {
         cacheTypeK = "q8_0";
         cacheTypeV = "q8_0";
         gpuLayers = 99;
-        parallel = 1;
+        parallel = 16;
         flashAttention = true;
         threads = 16;
         jinja = true;
       };
 
-      # 5. Liquid AI LFM2.5-8B-A1B (hybrid conv/attention MoE, 1.5B active params)
+      # 6. Liquid AI LFM2.5-8B-A1B (hybrid conv/attention MoE, 1.5B active params)
       "lfm2.5-8b-a1b" = mkLlamaCpp {
         modelId = "lfm2.5-8b-a1b";
         description = "LFM2.5 8B A1B (Q4_K_M) - fast MoE chat/coder, 1.5B active params";
@@ -172,7 +177,7 @@ in {
         cacheTypeK = "q8_0";
         cacheTypeV = "q8_0";
         gpuLayers = 99;
-        parallel = 1;
+        parallel = 16;
         flashAttention = true;
         threads = 16;
         jinja = true;
