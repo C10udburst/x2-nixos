@@ -15,6 +15,10 @@
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    kyojin = {
+      url = "github:Yamz-Labs/kyojin";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =

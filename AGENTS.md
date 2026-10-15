@@ -99,6 +99,20 @@ Generates a `llama-server` service for any standard GGUF model with ROCm acceler
 };
 ```
 
+#### `mkKyojin` (`modules/kyojin/mkKyojin.nix`)
+Generates an ExLlamaV3/Kyojin inference service running native ROCm on gfx1151:
+```nix
+"glm-5.3-flash" = mkKyojin {
+  modelId = "glm-5.3-flash";
+  description = "GLM-5.3-Flash EXL3 (320B total, 18B active) with MTP speculative decoding & vision";
+  modelPath = "glm-5.3-flash";
+  flavor = "glm";
+  context = 524288; # Max context fitting in 128GB unified RAM (~118 GiB footprint)
+  numDraft = 2;
+  sessions = 1;
+};
+```
+
 ---
 
 ## 3. Workload Orchestration & Lock Protocol (`modules/workload-manager.nix`)
@@ -182,6 +196,9 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     │   └── mkGufo.nix          # mkGufo helper implementing strict model contract
     ├── immich/
     │   └── default.nix         # Immich ML service and netcat wake socket
+    ├── kyojin/
+    │   ├── default.nix         # Kyojin user, permissions, and tmpfiles
+    │   └── mkKyojin.nix        # mkKyojin helper implementing strict model contract
     ├── llama-cpp/
     │   ├── default.nix         # llama-cpp base options and user
     │   └── mkLlamaCpp.nix      # mkLlamaCpp helper implementing strict model contract

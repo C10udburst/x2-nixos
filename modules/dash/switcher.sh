@@ -90,7 +90,7 @@ if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
 
     # Start target service (systemd Conflicts automatically stops other models)
     if sudo -n "${SYSTEMCTL:-systemctl}" start "$TARGET_SERVICE" 2>/dev/null; then
-      DEADLINE=$(( $(date +%s) + 90 ))
+      DEADLINE=$(( $(date +%s) + 180 ))
       READY=0
       while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         if curl -s -f "${TARGET_URL}/health" >/dev/null 2>&1 || \

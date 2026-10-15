@@ -57,6 +57,7 @@ in {
           "gateway"
           "gufo"
           "llama-cpp"
+          "kyojin"
           "immich-ml"
           "comfyui"
         ];

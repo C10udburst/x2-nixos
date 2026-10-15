@@ -222,10 +222,14 @@ def handle_status():
                 btype = "llama-cpp"
             elif unit.startswith("gufo-"):
                 btype = "gufo"
+            elif unit.startswith("kyojin-"):
+                btype = "kyojin"
             elif "llama" in unit:
                 btype = "llama-cpp"
             elif "gufo" in unit:
                 btype = "gufo"
+            elif "kyojin" in unit:
+                btype = "kyojin"
             else:
                 btype = "custom"
         model_list.append({
@@ -358,7 +362,7 @@ def handle_switch(body):
             sys.stdout.buffer.flush()
             return
 
-        deadline = time.time() + 90
+        deadline = time.time() + 180
         ready = False
         while time.time() < deadline:
             if check_url_health(target_url):

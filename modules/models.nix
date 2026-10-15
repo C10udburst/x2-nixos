@@ -15,12 +15,21 @@ let
       ;
   };
   mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix { inherit pkgs lib config; };
+  mkKyojin = import ./kyojin/mkKyojin.nix {
+    inherit
+      pkgs
+      lib
+      config
+      inputs
+      ;
+  };
 in
 {
   imports = [
     ./workload-manager.nix
     ./gufo
     ./llama-cpp
+    ./kyojin
     ./immich
     ./comfyui
   ];
@@ -77,7 +86,7 @@ in
 
   config = {
     _module.args = {
-      inherit mkGufo mkLlamaCpp;
+      inherit mkGufo mkLlamaCpp mkKyojin;
     };
 
     # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
@@ -194,6 +203,31 @@ in
         flashAttention = true;
         threads = 16;
         jinja = true;
+      };
+
+      # 8. GLM-5.3-Flash EXL3 (320B total, 18B active) with MTP speculative decoding & vision
+      "glm-5.3-flash" = mkKyojin {
+        modelId = "glm-5.3-flash";
+        description = "GLM-5.3-Flash EXL3 (320B total, 18B active) with MTP speculative decoding & vision";
+        modelPath = "glm-5.3-flash";
+        flavor = "glm";
+        context = 524288; # Max context fitting in 128GB unified RAM (~118 GiB footprint)
+        numDraft = 2;
+        sessions = 1;
+        uncensor = false;
+      };
+
+      # 9. GLM-5.3-Flash EXL3 Uncensored (shares base weights via runtime refusal-direction ablit hook)
+      "glm-5.3-flash-uncensored" = mkKyojin {
+        modelId = "glm-5.3-flash-uncensored";
+        remappedModel = "glm-5.3-flash-uncensored";
+        description = "GLM-5.3-Flash EXL3 Uncensored (320B, runtime refusal-direction ablit hook)";
+        modelPath = "glm-5.3-flash"; # Zero duplicate weights; reuses base EXL3 pack
+        flavor = "glm";
+        context = 524288;
+        numDraft = 2;
+        sessions = 1;
+        uncensor = true;
       };
     };
   };
