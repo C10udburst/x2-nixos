@@ -53,6 +53,11 @@
     # ROCm 7 natively targets gfx1151; HSA_OVERRIDE_GFX_VERSION must stay unset
     unset HSA_OVERRIDE_GFX_VERSION
 
+    # Ensure helper modules (serve_compat, image_cache) from kyojin repo are accessible
+    ${lib.optionalString (inputs ? kyojin) ''
+      export PYTHONPATH="${inputs.kyojin}/tools:${inputs.kyojin}/tools/strix_halo:''${PYTHONPATH:-}"
+    ''}
+
     TARGET_PATH="${modelsDir}/${modelPath}"
 
     if [ -d "$TARGET_PATH" ]; then
@@ -171,7 +176,7 @@ in {
       ];
 
       ExecStartPre = [
-        "/bin/sh -c '${pkgs.coreutils}/bin/mkdir -p /var/lib/kyojin/tmp && ${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_model && ${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_model'"
+        "/bin/sh -c '${pkgs.coreutils}/bin/mkdir -p /var/lib/kyojin/tmp && ${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_model && (${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_model 2>/dev/null || true)'"
       ];
       ExecStart = "${launcher}";
       ExecStopPost = [

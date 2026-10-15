@@ -7,10 +7,21 @@
 }: let
   cfg = config.services.kyojin;
 
-  defaultKyojinPkg =
+  rawKyojinPkg =
     if inputs ? kyojin && inputs.kyojin ? packages
     then inputs.kyojin.packages.${pkgs.system}.kyojin
     else pkgs.kyojin or null;
+
+  defaultKyojinPkg =
+    if rawKyojinPkg != null && inputs ? kyojin
+    then
+      rawKyojinPkg.overrideAttrs (old: {
+        postInstall = (old.postInstall or "") + ''
+          cp ${inputs.kyojin}/tools/serve_compat.py $out/share/kyojin/
+          cp ${inputs.kyojin}/tools/strix_halo/image_cache.py $out/share/kyojin/
+        '';
+      })
+    else rawKyojinPkg;
 in {
   options.services.kyojin = {
     enable = lib.mkEnableOption "Kyojin exllamav3 inference engine base support" // {
