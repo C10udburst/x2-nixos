@@ -5,7 +5,8 @@
   "type": "module",
   "description": "GMKtec EVO-X2 AI inference dashboard frontend (daisyUI 5 + Lightweight Charts)",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "lockfile": "npm install --package-lock-only && node scripts/prune-lockfile.mjs"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.1"

@@ -1,4 +1,6 @@
-@import "tailwindcss";
+/* Tailwind 4 + daisyUI 5. Sources are pinned explicitly so the stylesheet is
+   identical wherever the build runs (no ambient scanning of scripts/, docs/…). */
+@import "tailwindcss" source(none);
 
 @plugin "daisyui" {
   themes: halloween --default;
