@@ -145,16 +145,12 @@ The gateway runs on **port 8080**:
 
 Tailwind CSS 4 + **daisyUI 5** (`data-theme="halloween"`) + **Lightweight Charts™** (TradingView), bundled by esbuild. Zero runtime CDN: everything is bundled into two content-hashed files.
 
-- **Header**: API liveness is a single `status` dot (green = live, red = unreachable, tooltip shows the poll interval).
-- **Telemetry**: four live area charts (Unified RAM, VRAM + GTT, GPU engine load, CPU load). Each 2.5s poll appends one point; a ~10 minute rolling window (240 points) is kept in `sessionStorage` so charts survive reloads. Hovering a chart previews that sample in the card header.
-- **Active workload**: builtin daisyUI `card` (`card-body` / `card-title` / `card-actions`) showing the single workload currently owning unified memory.
-- **Models**: one `card` per registry entry with a `badge badge-neutral` engine chip, a session badge and a hot-swap button.
-- **Service list (footer)**: plain `status` dot + name + clickable port (no nested chips) linking straight to each subsystem.
-- **Playground**: SSE streaming chat with a `stats` block for prefill t/s, decode t/s, TTFT and token count.
+Documentation for the libraries can be found at `https://daisyui.com/llms.txt` and `https://tradingview.github.io/lightweight-charts/docs_map.md`, only access it if needed.
 
 ### Frontend build
 - `frontend.nix` uses `buildNpmPackage` (`npm ci --offline` against `package-lock.json`, `npmDepsHash` pinned) and produces a plain static directory: `index.html` + `assets/app.<hash>.{js,css}`. Nothing Node-related lands in the runtime closure.
 - Local iteration without Nix: `cd modules/dash/frontend && npm ci && npm run build` (output in `frontend/dist`).
+- `package-lock.json` is trimmed to **linux/x64** binaries (`npm run lockfile` → `scripts/prune-lockfile.mjs`), because the `npmDepsHash` prefetch downloads every tarball the lockfile lists (96 → 41). `frontend.nix` fails the `checkPhase` if a foreign-platform binary sneaks back in.
 - After changing `package.json`/`package-lock.json`, refresh `npmDepsHash`: set it to `lib.fakeHash`, build, and copy the reported `got: sha256-…` back in.
 
 ---

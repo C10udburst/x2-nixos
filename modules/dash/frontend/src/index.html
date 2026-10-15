@@ -107,52 +107,71 @@
 
     <section class="card bg-base-200 shadow">
       <div class="card-body gap-4">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="card-title text-lg">Inference playground</h2>
-          <p class="text-sm opacity-60">
-            Target: <code id="playground-target" class="font-mono font-bold text-primary">auto</code>
-          </p>
+        <div class="flex flex-wrap items-end justify-between gap-3">
+          <div class="flex flex-col gap-1">
+            <h2 class="card-title text-lg">Inference playground</h2>
+            <p class="text-xs opacity-50">Target only sets the request <code class="font-mono">model</code> — the loaded
+              workload hot-swaps on the request itself, never on selection.</p>
+          </div>
+          <div class="flex flex-wrap items-end gap-3">
+            <label class="flex flex-col gap-1">
+              <span class="text-xs font-semibold uppercase opacity-60">Target model</span>
+              <select id="playground-target" class="select select-sm w-64 font-mono"
+                title="Request target — does not switch the loaded workload"></select>
+            </label>
+            <label class="flex flex-col gap-1">
+              <span class="text-xs font-semibold uppercase opacity-60">Parallel agents</span>
+              <input id="agent-count" class="input input-sm w-24 text-center font-mono" type="number" min="1" max="6"
+                step="1" value="1" />
+            </label>
+          </div>
         </div>
 
         <textarea id="prompt-input" class="textarea h-28 w-full text-sm"
           placeholder="Ask anything to test SSE streaming inference…">Explain how unified memory on AMD Ryzen AI Max+ 395 eliminates PCIe bandwidth bottlenecks.</textarea>
-
-        <div class="stats w-full stats-vertical border border-base-300 sm:stats-horizontal">
-          <div class="stat">
-            <div class="stat-title">Prefill</div>
-            <div class="stat-value font-mono text-2xl" id="stat-prefill">--</div>
-            <div class="stat-desc">tokens / s</div>
-          </div>
-          <div class="stat">
-            <div class="stat-title">Inference</div>
-            <div class="stat-value font-mono text-2xl" id="stat-tps">--</div>
-            <div class="stat-desc">tokens / s</div>
-          </div>
-          <div class="stat">
-            <div class="stat-title">TTFT</div>
-            <div class="stat-value font-mono text-2xl" id="stat-ttft">--</div>
-            <div class="stat-desc">ms to first token</div>
-          </div>
-          <div class="stat">
-            <div class="stat-title">Tokens</div>
-            <div class="stat-value font-mono text-2xl" id="stat-tokens">0</div>
-            <div class="stat-desc">generated</div>
-          </div>
-        </div>
 
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="flex items-center gap-2">
             <button id="btn-clear" class="btn btn-ghost btn-sm" type="button">Clear</button>
             <button id="btn-send" class="btn btn-primary btn-sm min-w-24" type="button">Generate</button>
           </div>
-          <p class="font-mono text-xs opacity-40">POST /v1/chat/completions • SSE</p>
+          <p class="font-mono text-xs opacity-40"><span id="agent-hint">POST /v1/chat/completions • SSE</span></p>
         </div>
 
-        <div id="stream-output" class="min-h-20 max-h-96 overflow-y-auto rounded-box bg-base-300 p-4 font-mono text-xs">
-          <div id="stream-reasoning" class="hidden mb-3 whitespace-pre-wrap border-l-2 border-warning p-3 opacity-80">
+        <!-- Fleet averages, only rendered with more than one parallel agent -->
+        <div id="agent-avg" class="stats w-full stats-vertical hidden border border-base-300 sm:stats-horizontal">
+          <div class="stat">
+            <div class="stat-title">Avg prefill</div>
+            <div class="stat-value font-mono text-2xl" id="avg-prefill">--</div>
+            <div class="stat-desc">tokens / s</div>
           </div>
-          <div id="stream-content" class="whitespace-pre-wrap opacity-80">Output will stream here…</div>
+          <div class="stat">
+            <div class="stat-title">Avg inference</div>
+            <div class="stat-value font-mono text-2xl" id="avg-tps">--</div>
+            <div class="stat-desc">tokens / s</div>
+          </div>
+          <div class="stat">
+            <div class="stat-title">Avg TTFT</div>
+            <div class="stat-value font-mono text-2xl" id="avg-ttft">--</div>
+            <div class="stat-desc">ms to first token</div>
+          </div>
+          <div class="stat">
+            <div class="stat-title">Avg tokens</div>
+            <div class="stat-value font-mono text-2xl" id="avg-tokens">0</div>
+            <div class="stat-desc">per agent</div>
+          </div>
+          <div class="stat">
+            <div class="stat-title">Total tokens</div>
+            <div class="stat-value font-mono text-2xl" id="sum-tokens">0</div>
+            <div class="stat-desc"><span id="avg-progress">0/0 done</span></div>
+          </div>
         </div>
+
+        <!-- One chip per agent: toggles which panels are shown side by side -->
+        <div id="agent-chips" class="hidden flex-wrap items-center gap-2"></div>
+
+        <!-- One stats block + output panel per agent -->
+        <div id="agent-panels" class="grid w-full grid-cols-1 gap-3"></div>
       </div>
     </section>
 

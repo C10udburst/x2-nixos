@@ -3,7 +3,7 @@
 import { fetchStatus, stopWorkloads, switchModel } from "./api.js";
 import { METRICS, initCharts, pushMetric, setMetricSub } from "./charts.js";
 import { clearNotify, initNotify, notify } from "./notify.js";
-import { initPlayground, setPlaygroundTarget } from "./playground.js";
+import { clearPlaygroundTargetPick, initPlayground, setPlaygroundTarget } from "./playground.js";
 import { initModels, renderModels } from "./models.js";
 import { initServices, renderServices } from "./services.js";
 import { inferenceTarget, POLL_INTERVAL_MS, state } from "./state.js";
@@ -52,6 +52,7 @@ async function handleSwitch(name) {
   if (state.switching) return;
   state.switching = true;
   state.pending = name;
+  clearPlaygroundTargetPick(); // an explicit switch owns the playground target again
   renderWorkload();
   renderModels();
   try {
