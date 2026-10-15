@@ -22,6 +22,10 @@
     pkgs.curl
     pkgs.jq
 
+    # Build and compilation tools
+    pkgs.gcc
+    pkgs.ninja
+
     # System configuration setup
     pkgs.git
     pkgs.alejandra

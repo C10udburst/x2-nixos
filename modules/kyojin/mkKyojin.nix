@@ -45,10 +45,17 @@
     HIP_VISIBLE_DEVICES = "0";
     HOME = "/var/lib/kyojin";
     TMPDIR = "/var/lib/kyojin/tmp";
+    CC = "${pkgs.gcc}/bin/gcc";
+    CXX = "${pkgs.gcc}/bin/g++";
   };
 
   launcher = pkgs.writeShellScript "kyojin-run-${modelId}" ''
     set -euo pipefail
+
+    # Ensure Triton kernel compiler and ROCm JIT find GCC and Ninja
+    export PATH="${lib.makeBinPath [ pkgs.gcc pkgs.ninja pkgs.coreutils ]}:$PATH"
+    export CC="${pkgs.gcc}/bin/gcc"
+    export CXX="${pkgs.gcc}/bin/g++"
 
     # ROCm 7 natively targets gfx1151; HSA_OVERRIDE_GFX_VERSION must stay unset
     unset HSA_OVERRIDE_GFX_VERSION
@@ -155,6 +162,11 @@ in {
   systemdService = {
     description = "Kyojin LLM Service: ${modelId} (${description})";
     after = ["network.target"];
+    path = [
+      pkgs.gcc
+      pkgs.ninja
+      pkgs.coreutils
+    ];
     environment =
       defaultEnv
       // env
