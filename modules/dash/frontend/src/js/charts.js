@@ -1,33 +1,107 @@
 // Live telemetry charts (Lightweight Charts(TM) by TradingView).
-// One auto-scaling area series per metric, fed by the /api/status poll.
-// Numeric readouts are updated independently of the canvas, so the cards stay
-// useful even when charting is unavailable.
+// Multi-series and single-series auto-scaling charts, fed by the /api/status poll.
+// Numeric readouts and floating tooltips are updated on crosshair movement.
 
-import { AreaSeries, ColorType, CrosshairMode, createChart } from "lightweight-charts";
+import { AreaSeries, LineSeries, ColorType, CrosshairMode, createChart } from "lightweight-charts";
 import { cssColor, withAlpha } from "./theme.js";
 
 const HISTORY_KEY = "evo-x2-telemetry";
 const MAX_POINTS = 240; // ~10 minutes at the 2.5s poll interval
 
+const COLOR_CLASSES = {
+  warning: "text-warning",
+  info: "text-info",
+  success: "text-success",
+  secondary: "text-secondary",
+  primary: "text-primary",
+  accent: "text-accent",
+};
+
 export const METRICS = [
-  { id: "ram", color: "success", decimals: 1, unit: " GB" },
-  { id: "vram", color: "secondary", decimals: 1, unit: " GB" },
-  { id: "gpu", color: "info", decimals: 0, unit: "%" },
-  { id: "cpu", color: "warning", decimals: 2, unit: "" },
+  { id: "ram", chartId: "ram" },
+  { id: "gtt", chartId: "vram" },
+  { id: "vram", chartId: "vram" },
+  { id: "cpu", chartId: "load" },
+  { id: "gpu", chartId: "load" },
+  { id: "cpu_temp", chartId: "temp" },
+  { id: "gpu_temp", chartId: "temp" },
 ];
 
-export function formatMetric(metric, value) {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
-  return `${value.toFixed(metric.decimals)}${metric.unit}`;
+function formatSingle(val, decimals = 1, unit = "") {
+  if (val === null || val === undefined || !Number.isFinite(val)) return "--";
+  return `${val.toFixed(decimals)}${unit}`;
 }
 
-const readouts = new Map(); // metric id -> { metric, valueEl, subEl }
-const plots = new Map(); // metric id -> { chart, series, latest }
-const buffers = new Map(); // metric id -> [{ time, value }]
+function formatMulti(values, seriesList) {
+  const parts = seriesList.map((s) => {
+    const val = values[s.key];
+    const formatted = (val !== null && val !== undefined && Number.isFinite(val))
+      ? `${val.toFixed(s.decimals)}${s.unit}`
+      : "--";
+    const colorCls = COLOR_CLASSES[s.color] || "";
+    return `<span class="${colorCls}">${s.label} ${formatted}</span>`;
+  });
+  return parts.join(' <span class="opacity-40">•</span> ');
+}
+
+export const CHARTS = [
+  {
+    id: "ram",
+    series: [
+      { key: "ram", color: "success", label: "RAM", decimals: 1, unit: " GB", type: "area" },
+    ],
+    formatReadout: (vals) => formatSingle(vals.ram, 1, " GB"),
+  },
+  {
+    id: "vram",
+    series: [
+      { key: "gtt", color: "secondary", label: "GTT", decimals: 1, unit: " GB", type: "line" },
+      { key: "vram", color: "primary", label: "VRAM", decimals: 1, unit: " GB", type: "line" },
+    ],
+    formatReadout: (vals) => formatMulti(vals, [
+      { key: "gtt", color: "secondary", label: "GTT", decimals: 1, unit: " GB" },
+      { key: "vram", color: "primary", label: "VRAM", decimals: 1, unit: " GB" },
+    ]),
+  },
+  {
+    id: "load",
+    series: [
+      { key: "cpu", color: "warning", label: "CPU", decimals: 0, unit: "%", type: "line" },
+      { key: "gpu", color: "info", label: "GPU", decimals: 0, unit: "%", type: "line" },
+    ],
+    formatReadout: (vals) => formatMulti(vals, [
+      { key: "cpu", color: "warning", label: "CPU", decimals: 0, unit: "%" },
+      { key: "gpu", color: "info", label: "GPU", decimals: 0, unit: "%" },
+    ]),
+  },
+  {
+    id: "temp",
+    series: [
+      { key: "cpu_temp", color: "warning", label: "CPU", decimals: 1, unit: "°C", type: "line" },
+      { key: "gpu_temp", color: "info", label: "GPU", decimals: 1, unit: "°C", type: "line" },
+    ],
+    formatReadout: (vals) => formatMulti(vals, [
+      { key: "cpu_temp", color: "warning", label: "CPU", decimals: 1, unit: "°C" },
+      { key: "gpu_temp", color: "info", label: "GPU", decimals: 1, unit: "°C" },
+    ]),
+  },
+];
+
+const readouts = new Map(); // chart id -> { chartDef, valueEl, subEl }
+const plots = new Map(); // chart id -> { chart, seriesMap, latest }
+const buffers = new Map(); // series key -> [{ time, value }]
+const seriesToChart = new Map(); // series key -> chart id
+
+for (const c of CHARTS) {
+  for (const s of c.series) {
+    seriesToChart.set(s.key, c.id);
+  }
+}
+
 let pushes = 0;
 
-function partsFor(metricId) {
-  const card = document.querySelector(`[data-metric="${metricId}"]`);
+function partsFor(chartId) {
+  const card = document.querySelector(`[data-metric="${chartId}"]`);
   if (!card) return null;
   return {
     valueEl: card.querySelector("[data-value]"),
@@ -36,9 +110,10 @@ function partsFor(metricId) {
   };
 }
 
-function showValue(metricId, value) {
-  const readout = readouts.get(metricId);
-  if (readout?.valueEl) readout.valueEl.textContent = formatMetric(readout.metric, value);
+function showValues(chartId, values) {
+  const readout = readouts.get(chartId);
+  if (!readout?.valueEl) return;
+  readout.valueEl.innerHTML = readout.chartDef.formatReadout(values);
 }
 
 function loadHistory() {
@@ -58,15 +133,15 @@ function saveHistory() {
   }
 }
 
-function createPlot(metric, chartEl, textColor, gridColor) {
-  const line = cssColor(metric.color);
+function createPlot(chartDef, chartEl, textColor, gridColor) {
+  chartEl.style.position = "relative";
+
   const chart = createChart(chartEl, {
     autoSize: true,
     layout: {
       background: { type: ColorType.Solid, color: "transparent" },
       textColor,
       fontSize: 10,
-      // This is a local only service, so we don't need attribution, only I will use the dashboard
       attributionLogo: false,
     },
     grid: { vertLines: { visible: false }, horzLines: { color: gridColor } },
@@ -81,26 +156,112 @@ function createPlot(metric, chartEl, textColor, gridColor) {
     handleScale: false,
   });
 
-  const series = chart.addSeries(AreaSeries, {
-    lineColor: line,
-    topColor: withAlpha(line, 0.45),
-    bottomColor: withAlpha(line, 0.03),
-    lineWidth: 2,
-    priceLineVisible: false,
-    lastValueVisible: false,
-    crosshairMarkerRadius: 3,
+  const tooltip = document.createElement("div");
+  tooltip.className =
+    "pointer-events-none absolute z-20 hidden rounded border border-base-300 bg-base-300/95 px-2 py-1 font-mono text-xs shadow-lg backdrop-blur";
+  chartEl.appendChild(tooltip);
+
+  const seriesMap = new Map();
+  const latest = {};
+
+  for (const sDef of chartDef.series) {
+    const line = cssColor(sDef.color);
+    let series;
+    if (sDef.type === "line") {
+      series = chart.addSeries(LineSeries, {
+        color: line,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerRadius: 3,
+      });
+    } else {
+      series = chart.addSeries(AreaSeries, {
+        lineColor: line,
+        topColor: withAlpha(line, 0.45),
+        bottomColor: withAlpha(line, 0.03),
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerRadius: 3,
+      });
+    }
+
+    const data = buffers.get(sDef.key) ?? [];
+    if (data.length > 0) series.setData(data);
+
+    seriesMap.set(sDef.key, series);
+    latest[sDef.key] = data.at(-1)?.value ?? null;
+  }
+
+  plots.set(chartDef.id, { chart, seriesMap, latest });
+
+  // Crosshair move handler drives both the card header readout and the floating tooltip.
+  chart.subscribeCrosshairMove((param) => {
+    if (!param.time || !param.point) {
+      showValues(chartDef.id, latest);
+      tooltip.classList.add("hidden");
+      return;
+    }
+
+    const hovered = {};
+    const rows = [];
+    for (const sDef of chartDef.series) {
+      const sApi = seriesMap.get(sDef.key);
+      const point = sApi ? param.seriesData.get(sApi) : null;
+      const val = point ? point.value : latest[sDef.key];
+      hovered[sDef.key] = val;
+
+      const formatted = (val !== null && val !== undefined && Number.isFinite(val))
+        ? `${val.toFixed(sDef.decimals)}${sDef.unit}`
+        : "--";
+      const colorCls = COLOR_CLASSES[sDef.color] || "";
+      const hex = cssColor(sDef.color);
+      rows.push(`
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-1.5">
+            <span class="inline-block h-2 w-2 rounded-full" style="background-color: ${hex}"></span>
+            <span class="${colorCls} text-xs">${sDef.label}:</span>
+          </div>
+          <span class="font-bold text-xs">${formatted}</span>
+        </div>
+      `);
+    }
+
+    showValues(chartDef.id, hovered);
+
+    const timeDate = new Date(param.time * 1000);
+    const timeStr = timeDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+    tooltip.innerHTML = `
+      <div class="flex flex-col gap-1 min-w-28">
+        <div class="text-[10px] opacity-50">${timeStr}</div>
+        ${rows.join("")}
+      </div>
+    `;
+    tooltip.classList.remove("hidden");
+
+    const containerWidth = chartEl.clientWidth;
+    const containerHeight = chartEl.clientHeight;
+    const tipWidth = tooltip.offsetWidth || 130;
+    const tipHeight = tooltip.offsetHeight || 50;
+
+    let left = param.point.x + 12;
+    if (left + tipWidth > containerWidth - 8) {
+      left = param.point.x - tipWidth - 12;
+    }
+    left = Math.max(8, left);
+
+    let top = param.point.y - tipHeight / 2;
+    top = Math.max(4, Math.min(containerHeight - tipHeight - 4, top));
+
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
   });
 
-  const data = buffers.get(metric.id) ?? [];
-  if (data.length > 0) series.setData(data);
-
-  const plot = { chart, series, latest: data.at(-1)?.value ?? null };
-  plots.set(metric.id, plot);
-
-  // Hovering a point previews that sample instead of the live one.
-  chart.subscribeCrosshairMove((param) => {
-    const point = param.time ? param.seriesData.get(series) : null;
-    showValue(metric.id, point ? point.value : plot.latest);
+  chartEl.addEventListener("mouseleave", () => {
+    tooltip.classList.add("hidden");
+    showValues(chartDef.id, latest);
   });
 }
 
@@ -109,28 +270,36 @@ export function initCharts() {
   const textColor = cssColor("base-content");
   const gridColor = withAlpha(textColor, 0.1);
 
-  for (const metric of METRICS) {
-    const parts = partsFor(metric.id);
+  for (const chartDef of CHARTS) {
+    const parts = partsFor(chartDef.id);
     if (!parts) continue;
 
-    const restored = Array.isArray(history[metric.id]) ? history[metric.id] : [];
-    buffers.set(metric.id, restored);
-    readouts.set(metric.id, { metric, valueEl: parts.valueEl, subEl: parts.subEl });
-    showValue(metric.id, restored.at(-1)?.value ?? null);
+    const initialValues = {};
+    for (const sDef of chartDef.series) {
+      const restored = Array.isArray(history[sDef.key]) ? history[sDef.key] : [];
+      buffers.set(sDef.key, restored);
+      initialValues[sDef.key] = restored.at(-1)?.value ?? null;
+    }
+
+    readouts.set(chartDef.id, { chartDef, valueEl: parts.valueEl, subEl: parts.subEl });
+    showValues(chartDef.id, initialValues);
 
     try {
-      createPlot(metric, parts.chartEl, textColor, gridColor);
+      createPlot(chartDef, parts.chartEl, textColor, gridColor);
     } catch (error) {
-      console.error(`telemetry chart "${metric.id}" unavailable:`, error);
+      console.error(`telemetry chart "${chartDef.id}" unavailable:`, error);
     }
   }
 }
 
-export function pushMetric(id, value) {
+export function pushMetric(seriesKey, value) {
   if (!Number.isFinite(value)) return;
 
+  const chartId = seriesToChart.get(seriesKey);
+  if (!chartId) return;
+
   const time = Math.floor(Date.now() / 1000);
-  const data = buffers.get(id);
+  const data = buffers.get(seriesKey);
   if (!data) return;
 
   const last = data.at(-1);
@@ -141,19 +310,23 @@ export function pushMetric(id, value) {
   else data.push(point);
   if (data.length > MAX_POINTS) data.splice(0, data.length - MAX_POINTS);
 
-  const plot = plots.get(id);
+  const plot = plots.get(chartId);
   if (plot) {
-    plot.series.update(point);
-    plot.latest = value;
-    if (last && last.time !== time) plot.chart.timeScale().scrollToRealTime();
+    const series = plot.seriesMap.get(seriesKey);
+    if (series) {
+      series.update(point);
+      plot.latest[seriesKey] = value;
+      if (last && last.time !== time) plot.chart.timeScale().scrollToRealTime();
+    }
+    showValues(chartId, plot.latest);
   }
 
-  showValue(id, value);
   pushes += 1;
   if (pushes % METRICS.length === 0) saveHistory();
 }
 
-export function setMetricSub(id, text) {
-  const readout = readouts.get(id);
+export function setMetricSub(chartId, text) {
+  const readout = readouts.get(chartId);
   if (readout?.subEl && text && readout.subEl.textContent !== text) readout.subEl.textContent = text;
 }
+

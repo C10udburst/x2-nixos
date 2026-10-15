@@ -29,7 +29,9 @@ function applyStatus(data) {
   const { points, subs } = readTelemetry(data);
   for (const metric of METRICS) {
     if (Number.isFinite(points[metric.id])) pushMetric(metric.id, points[metric.id]);
-    setMetricSub(metric.id, subs[metric.id]);
+  }
+  for (const [chartId, text] of Object.entries(subs)) {
+    setMetricSub(chartId, text);
   }
 
   renderWorkload();

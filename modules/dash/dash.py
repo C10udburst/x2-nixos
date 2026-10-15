@@ -93,6 +93,119 @@ def get_active_workload():
     return None
 
 
+def get_cpu_busy_percent(load_avg):
+    stat_file = "/dev/shm/evo_cpu_stat"
+    try:
+        with open("/proc/stat", "r") as f:
+            fields = [int(x) for x in f.readline().split()[1:]]
+        idle = fields[3] + (fields[4] if len(fields) > 4 else 0)
+        total = sum(fields)
+    except Exception:
+        total, idle = None, None
+
+    if total is not None:
+        prev_total, prev_idle = None, None
+        if os.path.exists(stat_file):
+            try:
+                with open(stat_file, "r") as f:
+                    parts = f.read().split()
+                    if len(parts) >= 2:
+                        prev_total, prev_idle = int(parts[0]), int(parts[1])
+            except Exception:
+                pass
+        try:
+            with open(stat_file, "w") as f:
+                f.write(f"{total} {idle}\n")
+        except Exception:
+            pass
+
+        if prev_total is not None and prev_idle is not None:
+            diff_total = total - prev_total
+            diff_idle = idle - prev_idle
+            if diff_total > 0:
+                pct = 100.0 * (diff_total - diff_idle) / diff_total
+                return max(0.0, min(100.0, round(pct, 1)))
+
+    try:
+        cpu_count = os.cpu_count() or 1
+        return max(0.0, min(100.0, round((load_avg[0] / cpu_count) * 100, 1)))
+    except Exception:
+        return 0.0
+
+
+def get_temperatures():
+    cpu_temp = None
+    gpu_temp = None
+
+    for hwmon in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        name_path = os.path.join(hwmon, "name")
+        if not os.path.exists(name_path):
+            continue
+        try:
+            with open(name_path, "r") as f:
+                name = f.read().strip()
+        except Exception:
+            continue
+
+        if name in ("k10temp", "zenpower", "coretemp"):
+            for tf in ("temp1_input", "temp2_input"):
+                tp = os.path.join(hwmon, tf)
+                if os.path.exists(tp):
+                    try:
+                        with open(tp, "r") as f:
+                            val = int(f.read().strip())
+                            if val > 0:
+                                cpu_temp = round(val / 1000.0, 1)
+                                break
+                    except Exception:
+                        pass
+
+        if name in ("amdgpu", "radeon"):
+            for tf in ("temp1_input", "temp2_input"):
+                tp = os.path.join(hwmon, tf)
+                if os.path.exists(tp):
+                    try:
+                        with open(tp, "r") as f:
+                            val = int(f.read().strip())
+                            if val > 0:
+                                gpu_temp = round(val / 1000.0, 1)
+                                break
+                    except Exception:
+                        pass
+
+    # Fallback for CPU temperature from thermal zones if not found
+    if cpu_temp is None:
+        for tz in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
+            type_path = os.path.join(tz, "type")
+            temp_path = os.path.join(tz, "temp")
+            if os.path.exists(type_path) and os.path.exists(temp_path):
+                try:
+                    with open(type_path, "r") as f:
+                        tz_type = f.read().strip().lower()
+                    if any(k in tz_type for k in ("x86_pkg_temp", "k10temp", "cpu", "soc", "acpitz")):
+                        with open(temp_path, "r") as f:
+                            val = int(f.read().strip())
+                            if val > 0:
+                                cpu_temp = round(val / 1000.0, 1)
+                                break
+                except Exception:
+                    pass
+
+    # Fallback for GPU temperature from drm card hwmon
+    if gpu_temp is None:
+        for tp in sorted(glob.glob("/sys/class/drm/card[0-9]/device/hwmon/hwmon*/temp*_input")):
+            try:
+                with open(tp, "r") as f:
+                    val = int(f.read().strip())
+                    if val > 0:
+                        gpu_temp = round(val / 1000.0, 1)
+                        break
+            except Exception:
+                pass
+
+    return cpu_temp, gpu_temp
+
+
 def get_system_stats():
     mem_total_kb = 0
     mem_avail_kb = 0
@@ -155,6 +268,9 @@ def get_system_stats():
     except Exception:
         load_avg = [0.0, 0.0, 0.0]
 
+    cpu_temp, gpu_temp = get_temperatures()
+    cpu_busy = get_cpu_busy_percent(load_avg)
+
     return {
         "memory": {
             "total_mb": round(mem_total_kb / 1024, 1),
@@ -165,10 +281,20 @@ def get_system_stats():
         "gpu": {
             "device": "AMD Radeon Graphics (Ryzen AI Max+ 395)",
             "busy_percent": gpu_busy,
+            "temp_c": gpu_temp,
             "vram_used_mb": round(vram_used_b / (1024 * 1024), 1),
             "vram_total_mb": round(vram_total_b / (1024 * 1024), 1),
             "gtt_used_mb": round(gtt_used_b / (1024 * 1024), 1),
             "gtt_total_mb": round(gtt_total_b / (1024 * 1024), 1),
+        },
+        "cpu": {
+            "busy_percent": cpu_busy,
+            "temp_c": cpu_temp,
+            "load_avg": load_avg,
+        },
+        "temperatures": {
+            "cpu_c": cpu_temp,
+            "gpu_c": gpu_temp,
         },
         "load_avg": load_avg,
     }
