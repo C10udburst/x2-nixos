@@ -2,9 +2,10 @@
   config,
   lib,
   pkgs,
-  inputs ? {},
+  inputs ? { },
   ...
-}: let
+}:
+let
   mkGufo = import ./gufo/mkGufo.nix {
     inherit
       pkgs
@@ -13,8 +14,9 @@
       inputs
       ;
   };
-  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix {inherit pkgs lib config;};
-in {
+  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix { inherit pkgs lib config; };
+in
+{
   imports = [
     ./workload-manager.nix
     ./gufo
@@ -68,7 +70,7 @@ in {
           };
         }
       );
-      default = {};
+      default = { };
       description = "Global map of model_id -> { serviceName, remappedModel, url, systemdService, ... }";
     };
   };
@@ -79,21 +81,20 @@ in {
     };
 
     # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
-    systemd.services =
-      lib.mapAttrs' (
-        _: m: let
-          unitAttr = lib.removeSuffix ".service" m.serviceName;
-          otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
-        in
-          lib.nameValuePair unitAttr (
-            m.systemdService
-            // {
-              conflicts = (m.systemdService.conflicts or []) ++ otherUnits;
-              wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
-            }
-          )
+    systemd.services = lib.mapAttrs' (
+      _: m:
+      let
+        unitAttr = lib.removeSuffix ".service" m.serviceName;
+        otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
+      in
+      lib.nameValuePair unitAttr (
+        m.systemdService
+        // {
+          conflicts = (m.systemdService.conflicts or [ ]) ++ otherUnits;
+          wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
+        }
       )
-      config.services.models;
+    ) config.services.models;
 
     # Global models map definition
     services.models = {
@@ -103,7 +104,6 @@ in {
         description = "Qwen 3.8 Flash Next UD-Q4_K_XL with MTP speculative decoding & vision";
         modelPath = "qwen3.8-flash-next/UD-Q4_K_XL";
         mmprojPath = "qwen3.8-flash-next/mmproj-BF16.gguf";
-        speculative = "mtp";
         mtpModelPath = "qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf";
         context = 262144;
         sessions = 1;
@@ -167,7 +167,20 @@ in {
         jinja = true;
       };
 
-      # 6. Liquid AI LFM2.5-8B-A1B (hybrid conv/attention MoE, 1.5B active params)
+      # 6. Uncensored Flash-Next (Q4 Mix) with MTP speculative decoding & vision
+      "qwen3.8-flash-next-uncensored" = mkGufo {
+        modelId = "qwen3.8-flash-next-uncensored";
+        description = "Qwen 3.8 Flash Next Uncensored Q4 Mix with MTP speculative decoding & vision";
+        modelPath = "qwen3.8-flash-next-uncensored/Qwen3.8-Flash-Next-Uncensored-Gufo-Q4Mix.gguf";
+        mmprojPath = "qwen3.8-flash-next-uncensored/mmproj-BF16.gguf";
+        speculative = "mtp";
+        draftTokens = 6;
+        mtpModelPath = "qwen3.8-flash-next-uncensored/mtp/Qwen3.8-Flash-CIRU-STRIX-Orca-MTP-Q8_0.gguf";
+        context = 262144;
+        sessions = 1;
+      };
+
+      # 7. Liquid AI LFM2.5-8B-A1B (hybrid conv/attention MoE, 1.5B active params)
       "lfm2.5-8b-a1b" = mkLlamaCpp {
         modelId = "lfm2.5-8b-a1b";
         description = "LFM2.5 8B A1B (Q4_K_M) - fast MoE chat/coder, 1.5B active params";

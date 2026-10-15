@@ -17,6 +17,7 @@
   package ? null,
   mmprojPath ? null,
   speculative ? null,
+  draftTokens ? null,
   mtpModelPath ? null,
   draftModelPath ? null,
   dflashModelPath ? (
@@ -90,6 +91,10 @@
 
     ${lib.optionalString (speculative != null) ''
       ARGS+=(--speculative "${speculative}")
+    ''}
+
+    ${lib.optionalString (draftTokens != null) ''
+      ARGS+=(--draft-tokens "${toString draftTokens}")
     ''}
 
     ${lib.optionalString (mtpModelPath != null) ''
