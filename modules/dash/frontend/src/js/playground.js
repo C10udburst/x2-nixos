@@ -16,13 +16,6 @@ const MAX_TOKENS = 1024;
 const MAX_AGENTS = 6; // browsers keep at most 6 HTTP/1.1 connections per host
 
 // Full literal class strings so the Tailwind scanner keeps them in the bundle.
-const GRID_LAYOUTS = {
-  1: "grid w-full grid-cols-1 gap-3",
-  2: "grid w-full grid-cols-1 gap-3 md:grid-cols-2",
-  3: "grid w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3",
-};
-const GRID_CLASSES = Object.values(GRID_LAYOUTS);
-
 const STATS_CLASSES = {
   single: "stats w-full stats-vertical border border-base-300 sm:stats-horizontal",
   multi: "stats w-full stats-vertical border border-base-300",
@@ -197,13 +190,14 @@ function syncLayout() {
   els.avg.classList.toggle("hidden", !multi);
 
   const visible = agents.filter((agent) => agent.selected).length || 1;
-  setExclusiveClass(els.panels, multi ? GRID_LAYOUTS[Math.min(3, visible)] : GRID_LAYOUTS[1], GRID_CLASSES);
+  els.panels.classList.toggle("md:grid-cols-2", multi);
+  els.panels.classList.toggle("xl:grid-cols-3", multi && visible >= 3);
 
   for (const agent of agents) {
     const nodes = agent.nodes;
     if (!nodes) continue;
     nodes.panel.classList.toggle("hidden", !agent.selected);
-    nodes.head.hidden = !multi;
+    nodes.head.classList.toggle("hidden", !multi);
     if (nodes.chip) {
       setExclusiveClass(nodes.chip, agent.selected ? "badge-primary" : "badge-ghost", CHIP_STATES);
       nodes.chip.setAttribute("aria-pressed", String(agent.selected));
@@ -229,7 +223,7 @@ function patchAgent(agent) {
   setText(nodes.state, LABEL_OF[agent.status]);
   setText(nodes.content, agent.status === "error" ? agent.error : agent.content);
   setText(nodes.reasoning, agent.reasoning);
-  nodes.reasoning.classList.toggle("hidden", agent.reasoning.length === 0);
+  nodes.reasoning?.classList.toggle("hidden", agent.reasoning.length === 0);
 
   setExclusiveClass(nodes.dot, DOT_OF[agent.status], DOT_CLASSES);
   nodes.dot?.classList.toggle("animate-pulse", agent.status === "running");
@@ -238,12 +232,11 @@ function patchAgent(agent) {
     setExclusiveClass(nodes.chipDot, DOT_OF[agent.status], DOT_CLASSES);
     nodes.chipDot?.classList.toggle("animate-pulse", agent.status === "running");
     const seconds = agent.firstTokenAt ? Math.round((performance.now() - agent.startedAt) / 1000) : 0;
-    setText(
-      nodes.chipMeta,
-      agent.status === "idle"
-        ? "idle"
-        : `${agent.genTokens} tk${agent.status === "running" && seconds ? ` • ${seconds}s` : ""}`,
-    );
+    const meta =
+      agent.genTokens === 0
+        ? LABEL_OF[agent.status]
+        : `${agent.genTokens} tk${agent.status === "running" && seconds ? ` • ${seconds}s` : ""}`;
+    setText(nodes.chipMeta, meta);
   }
 }
 
@@ -261,8 +254,8 @@ function patchFleet() {
 }
 
 function scrollPanel(agent) {
-  const scroll = agent.nodes?.scroll;
-  if (scroll && !agent.nodes.panel.classList.contains("hidden")) scroll.scrollTop = scroll.scrollHeight;
+  const { scroll, panel } = agent.nodes ?? {};
+  if (scroll && panel && !panel.classList.contains("hidden")) scroll.scrollTop = scroll.scrollHeight;
 }
 
 /* ------------------------------------------------------------------ streaming */

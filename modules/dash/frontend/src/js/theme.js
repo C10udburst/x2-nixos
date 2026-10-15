@@ -17,37 +17,53 @@ const FALLBACKS = {
   error: "#f35248",
 };
 
-let probeContext = null;
+let probe = null; // CanvasRenderingContext2D | false | null (not probed yet)
+const SENTINEL = "#123456";
 
 function canvasProbe() {
-  if (probeContext === null) {
+  if (probe === null) {
     try {
-      probeContext = document.createElement("canvas").getContext("2d");
+      probe = document.createElement("canvas").getContext("2d", { willReadFrequently: true }) ?? false;
     } catch {
-      probeContext = false;
+      probe = false;
     }
   }
-  return probeContext || null;
+  return probe || null;
+}
+
+// Chrome hands a canvas `fillStyle` back in its *original* color function, so an
+// `oklch(...)` theme value round-trips as `oklch(...)` and still blows up inside the
+// chart library. Rasterizing a single pixel is the only normalization that always
+// resolves to sRGB bytes. Returns null when the browser rejects the color.
+export function normalizeColor(value) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const context = canvasProbe();
+  if (!context || !raw) return null;
+
+  try {
+    context.fillStyle = SENTINEL;
+    context.fillStyle = raw;
+    // An unaccepted value leaves fillStyle untouched.
+    if (context.fillStyle === SENTINEL && raw !== SENTINEL) return null;
+    context.clearRect(0, 0, 1, 1);
+    context.fillRect(0, 0, 1, 1);
+    const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+    return `#${[r, g, b].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  } catch {
+    return null;
+  }
 }
 
 export function cssColor(name) {
   const raw = getComputedStyle(document.documentElement)
     .getPropertyValue(`--color-${name}`)
     .trim();
-  const probe = canvasProbe();
-
-  if (probe && raw) {
-    probe.fillStyle = "#000000";
-    probe.fillStyle = raw;
-    // An unaccepted color leaves fillStyle untouched, so a change means success.
-    if (probe.fillStyle !== "#000000" || raw === "#000000") return probe.fillStyle;
-  }
-  return FALLBACKS[name] ?? "#808080";
+  return normalizeColor(raw) ?? FALLBACKS[name] ?? "#808080";
 }
 
 // Lightweight Charts needs literal rgba() for translucent area fills.
 export function withAlpha(color, alpha) {
-  const rgb = parseRgb(color);
+  const rgb = parseRgb(color) ?? parseRgb(normalizeColor(color) ?? "");
   return rgb ? `rgba(${rgb.join(", ")}, ${alpha})` : color;
 }
 
