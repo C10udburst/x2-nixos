@@ -11,7 +11,6 @@ export function readTelemetry(data) {
   const memory = data.memory;
   if (memory) {
     points.ram = memory.used_mb / GB;
-    subs.ram = `${round(points.ram)} / ${round(memory.total_mb / GB, 0)} GB • ${memory.percent_used}% used`;
   }
 
   const gpu = data.gpu;
@@ -22,20 +21,27 @@ export function readTelemetry(data) {
     points.gtt = gtt;
     points.vram = vram;
 
-    if (gpu.gtt_total_mb > 0) {
-      subs.vram = `GTT ${round(gtt)} / ${round(gpu.gtt_total_mb / GB, 0)} GB • VRAM ${round(vram)} GB`;
-    } else if (gpu.vram_total_mb > 0) {
-      subs.vram = `VRAM ${round(vram)} / ${round(gpu.vram_total_mb / GB, 0)} GB • GTT ${round(gtt)} GB`;
-    } else {
-      subs.vram = `Dynamic unified GTT allocation • VRAM ${round(vram)} GB`;
-    }
-
     points.gpu = gpu.busy_percent ?? 0;
     if (Number.isFinite(gpu.temp_c)) {
       points.gpu_temp = gpu.temp_c;
     } else if (Number.isFinite(data.temperatures?.gpu_c)) {
       points.gpu_temp = data.temperatures.gpu_c;
     }
+  }
+
+  if (memory) {
+    const ramStr = `${round(points.ram)} / ${round(memory.total_mb / GB, 0)} GB`;
+    const vramStr = Number.isFinite(points.vram) ? ` • VRAM ${round(points.vram)} GB` : "";
+    const gttStr = Number.isFinite(points.gtt) ? ` • GTT ${round(points.gtt)} GB` : "";
+    subs.ram = `RAM ${ramStr}${vramStr}${gttStr} • ${memory.percent_used}% used`;
+  }
+
+  const npu = data.npu;
+  points.npu = Number.isFinite(npu?.busy_percent) ? npu.busy_percent : 0;
+  if (Number.isFinite(npu?.temp_c)) {
+    points.npu_temp = npu.temp_c;
+  } else if (Number.isFinite(data.temperatures?.npu_c)) {
+    points.npu_temp = data.temperatures.npu_c;
   }
 
   const cpu = data.cpu;
@@ -54,16 +60,21 @@ export function readTelemetry(data) {
     }
   }
 
+  if (!Number.isFinite(points.npu_temp) && Number.isFinite(points.cpu_temp)) {
+    points.npu_temp = points.cpu_temp;
+  }
+
   if (Array.isArray(data.load_avg)) {
-    const [one, five, fifteen] = data.load_avg;
-    subs.load = `1m: ${round(one, 2)} • 5m: ${round(five, 2)} • GPU busy: ${round(points.gpu ?? 0, 0)}%`;
+    const [one, five] = data.load_avg;
+    subs.load = `1m: ${round(one, 2)} • 5m: ${round(five, 2)} • CPU: ${round(points.cpu ?? 0, 0)}% • GPU: ${round(points.gpu ?? 0, 0)}% • NPU: ${round(points.npu ?? 0, 0)}%`;
   } else {
-    subs.load = `CPU: ${round(points.cpu ?? 0, 0)}% • GPU: ${round(points.gpu ?? 0, 0)}%`;
+    subs.load = `CPU: ${round(points.cpu ?? 0, 0)}% • GPU: ${round(points.gpu ?? 0, 0)}% • NPU: ${round(points.npu ?? 0, 0)}%`;
   }
 
   const cpuTempStr = Number.isFinite(points.cpu_temp) ? `${round(points.cpu_temp, 0)}°C` : "--";
   const gpuTempStr = Number.isFinite(points.gpu_temp) ? `${round(points.gpu_temp, 0)}°C` : "--";
-  subs.temp = `CPU ${cpuTempStr} (Tctl) • GPU ${gpuTempStr} (edge)`;
+  const npuTempStr = Number.isFinite(points.npu_temp) ? `${round(points.npu_temp, 0)}°C` : "--";
+  subs.temp = `CPU ${cpuTempStr} • GPU ${gpuTempStr} • NPU ${npuTempStr}`;
 
   return { points, subs };
 }

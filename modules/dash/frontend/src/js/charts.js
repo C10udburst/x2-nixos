@@ -1,5 +1,6 @@
 // Live telemetry charts (Lightweight Charts(TM) by TradingView).
-// Multi-series and single-series auto-scaling charts, fed by the /api/status poll.
+// Multi-series auto-scaling charts, fed by the /api/status poll.
+// Interactive legend chips allow hiding/showing individual series.
 // Numeric readouts and floating tooltips are updated on crosshair movement.
 
 import { AreaSeries, LineSeries, ColorType, CrosshairMode, createChart } from "lightweight-charts";
@@ -19,71 +20,40 @@ const COLOR_CLASSES = {
 
 export const METRICS = [
   { id: "ram", chartId: "ram" },
-  { id: "gtt", chartId: "vram" },
-  { id: "vram", chartId: "vram" },
+  { id: "vram", chartId: "ram" },
+  { id: "gtt", chartId: "ram" },
   { id: "cpu", chartId: "load" },
   { id: "gpu", chartId: "load" },
+  { id: "npu", chartId: "load" },
   { id: "cpu_temp", chartId: "temp" },
   { id: "gpu_temp", chartId: "temp" },
+  { id: "npu_temp", chartId: "temp" },
 ];
-
-function formatSingle(val, decimals = 1, unit = "") {
-  if (val === null || val === undefined || !Number.isFinite(val)) return "--";
-  return `${val.toFixed(decimals)}${unit}`;
-}
-
-function formatMulti(values, seriesList) {
-  const parts = seriesList.map((s) => {
-    const val = values[s.key];
-    const formatted = (val !== null && val !== undefined && Number.isFinite(val))
-      ? `${val.toFixed(s.decimals)}${s.unit}`
-      : "--";
-    const colorCls = COLOR_CLASSES[s.color] || "";
-    return `<span class="${colorCls}">${s.label} ${formatted}</span>`;
-  });
-  return parts.join(' <span class="opacity-40">•</span> ');
-}
 
 export const CHARTS = [
   {
     id: "ram",
     series: [
-      { key: "ram", color: "success", label: "RAM", decimals: 1, unit: " GB", type: "area" },
-    ],
-    formatReadout: (vals) => formatSingle(vals.ram, 1, " GB"),
-  },
-  {
-    id: "vram",
-    series: [
-      { key: "gtt", color: "secondary", label: "GTT", decimals: 1, unit: " GB", type: "line" },
+      { key: "ram", color: "success", label: "RAM", decimals: 1, unit: " GB", type: "line" },
       { key: "vram", color: "primary", label: "VRAM", decimals: 1, unit: " GB", type: "line" },
+      { key: "gtt", color: "secondary", label: "GTT", decimals: 1, unit: " GB", type: "line" },
     ],
-    formatReadout: (vals) => formatMulti(vals, [
-      { key: "gtt", color: "secondary", label: "GTT", decimals: 1, unit: " GB" },
-      { key: "vram", color: "primary", label: "VRAM", decimals: 1, unit: " GB" },
-    ]),
   },
   {
     id: "load",
     series: [
       { key: "cpu", color: "warning", label: "CPU", decimals: 0, unit: "%", type: "line" },
       { key: "gpu", color: "info", label: "GPU", decimals: 0, unit: "%", type: "line" },
+      { key: "npu", color: "accent", label: "NPU", decimals: 0, unit: "%", type: "line" },
     ],
-    formatReadout: (vals) => formatMulti(vals, [
-      { key: "cpu", color: "warning", label: "CPU", decimals: 0, unit: "%" },
-      { key: "gpu", color: "info", label: "GPU", decimals: 0, unit: "%" },
-    ]),
   },
   {
     id: "temp",
     series: [
       { key: "cpu_temp", color: "warning", label: "CPU", decimals: 1, unit: "°C", type: "line" },
       { key: "gpu_temp", color: "info", label: "GPU", decimals: 1, unit: "°C", type: "line" },
+      { key: "npu_temp", color: "accent", label: "NPU", decimals: 1, unit: "°C", type: "line" },
     ],
-    formatReadout: (vals) => formatMulti(vals, [
-      { key: "cpu_temp", color: "warning", label: "CPU", decimals: 1, unit: "°C" },
-      { key: "gpu_temp", color: "info", label: "GPU", decimals: 1, unit: "°C" },
-    ]),
   },
 ];
 
@@ -91,6 +61,7 @@ const readouts = new Map(); // chart id -> { chartDef, valueEl, subEl }
 const plots = new Map(); // chart id -> { chart, seriesMap, latest }
 const buffers = new Map(); // series key -> [{ time, value }]
 const seriesToChart = new Map(); // series key -> chart id
+const hiddenSeries = new Set(); // series keys currently hidden
 
 for (const c of CHARTS) {
   for (const s of c.series) {
@@ -110,10 +81,86 @@ function partsFor(chartId) {
   };
 }
 
+function updateChipState(chartId, seriesKey) {
+  const readout = readouts.get(chartId);
+  if (!readout?.valueEl) return;
+  const chip = readout.valueEl.querySelector(`[data-series-key="${seriesKey}"]`);
+  if (!chip) return;
+
+  const sDef = readout.chartDef.series.find((s) => s.key === seriesKey);
+  const isHidden = hiddenSeries.has(seriesKey);
+
+  chip.setAttribute("aria-pressed", (!isHidden).toString());
+  chip.title = isHidden ? `Click to show ${sDef?.label || seriesKey}` : `Click to hide ${sDef?.label || seriesKey}`;
+
+  const dot = chip.querySelector("[data-series-dot]");
+  if (isHidden) {
+    chip.className =
+      "badge badge-sm cursor-pointer select-none gap-1 font-mono text-xs transition-all border border-dashed border-base-content/25 bg-transparent text-base-content/50 opacity-40 hover:opacity-75 line-through";
+    if (dot) dot.style.opacity = "0.2";
+  } else {
+    chip.className =
+      "badge badge-sm cursor-pointer select-none gap-1 font-mono text-xs transition-all border border-base-content/15 bg-base-300/80 hover:bg-base-300 text-base-content shadow-xs";
+    if (dot) dot.style.opacity = "1";
+  }
+}
+
+function toggleSeries(chartId, seriesKey) {
+  const plot = plots.get(chartId);
+  if (!plot) return;
+  const series = plot.seriesMap.get(seriesKey);
+  if (!series) return;
+
+  if (hiddenSeries.has(seriesKey)) {
+    hiddenSeries.delete(seriesKey);
+    series.applyOptions({ visible: true });
+  } else {
+    hiddenSeries.add(seriesKey);
+    series.applyOptions({ visible: false });
+  }
+
+  updateChipState(chartId, seriesKey);
+}
+
+function buildLegendChips(chartDef, valueEl) {
+  valueEl.innerHTML = "";
+  for (const sDef of chartDef.series) {
+    const hex = cssColor(sDef.color);
+    const colorCls = COLOR_CLASSES[sDef.color] || "";
+
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.dataset.seriesKey = sDef.key;
+    chip.className =
+      "badge badge-sm cursor-pointer select-none gap-1 font-mono text-xs transition-all border border-base-content/15 bg-base-300/80 hover:bg-base-300 text-base-content shadow-xs";
+    chip.title = `Click to hide ${sDef.label}`;
+    chip.setAttribute("aria-pressed", "true");
+    chip.innerHTML = `
+      <span class="inline-block h-2 w-2 rounded-full shrink-0 transition-opacity" data-series-dot style="background-color: ${hex}"></span>
+      <span class="${colorCls} font-semibold">${sDef.label}</span>
+      <span class="font-bold ml-0.5" data-series-val="${sDef.key}">--</span>
+    `;
+
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSeries(chartDef.id, sDef.key);
+    });
+
+    valueEl.appendChild(chip);
+  }
+}
+
 function showValues(chartId, values) {
   const readout = readouts.get(chartId);
   if (!readout?.valueEl) return;
-  readout.valueEl.innerHTML = readout.chartDef.formatReadout(values);
+  for (const sDef of readout.chartDef.series) {
+    const valEl = readout.valueEl.querySelector(`[data-series-val="${sDef.key}"]`);
+    if (!valEl) continue;
+    const val = values[sDef.key];
+    valEl.textContent = (val !== null && val !== undefined && Number.isFinite(val))
+      ? `${val.toFixed(sDef.decimals)}${sDef.unit}`
+      : "--";
+  }
 }
 
 function loadHistory() {
@@ -212,6 +259,8 @@ function createPlot(chartDef, chartEl, textColor, gridColor) {
       const val = point ? point.value : latest[sDef.key];
       hovered[sDef.key] = val;
 
+      if (hiddenSeries.has(sDef.key)) continue;
+
       const formatted = (val !== null && val !== undefined && Number.isFinite(val))
         ? `${val.toFixed(sDef.decimals)}${sDef.unit}`
         : "--";
@@ -229,6 +278,11 @@ function createPlot(chartDef, chartEl, textColor, gridColor) {
     }
 
     showValues(chartDef.id, hovered);
+
+    if (rows.length === 0) {
+      tooltip.classList.add("hidden");
+      return;
+    }
 
     const timeDate = new Date(param.time * 1000);
     const timeStr = timeDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -274,6 +328,11 @@ export function initCharts() {
     const parts = partsFor(chartDef.id);
     if (!parts) continue;
 
+    readouts.set(chartDef.id, { chartDef, valueEl: parts.valueEl, subEl: parts.subEl });
+    if (parts.valueEl) {
+      buildLegendChips(chartDef, parts.valueEl);
+    }
+
     const initialValues = {};
     for (const sDef of chartDef.series) {
       const restored = Array.isArray(history[sDef.key]) ? history[sDef.key] : [];
@@ -281,7 +340,6 @@ export function initCharts() {
       initialValues[sDef.key] = restored.at(-1)?.value ?? null;
     }
 
-    readouts.set(chartDef.id, { chartDef, valueEl: parts.valueEl, subEl: parts.subEl });
     showValues(chartDef.id, initialValues);
 
     try {
@@ -329,4 +387,3 @@ export function setMetricSub(chartId, text) {
   const readout = readouts.get(chartId);
   if (readout?.subEl && text && readout.subEl.textContent !== text) readout.subEl.textContent = text;
 }
-

@@ -136,6 +136,7 @@ def get_cpu_busy_percent(load_avg):
 def get_temperatures():
     cpu_temp = None
     gpu_temp = None
+    npu_temp = None
 
     for hwmon in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
         name_path = os.path.join(hwmon, "name")
@@ -143,7 +144,7 @@ def get_temperatures():
             continue
         try:
             with open(name_path, "r") as f:
-                name = f.read().strip()
+                name = f.read().strip().lower()
         except Exception:
             continue
 
@@ -172,6 +173,34 @@ def get_temperatures():
                                 break
                     except Exception:
                         pass
+
+        if any(k in name for k in ("amdxdna", "xdna", "npu", "accel")):
+            for tf in sorted(glob.glob(os.path.join(hwmon, "temp*_input"))):
+                try:
+                    with open(tf, "r") as f:
+                        val = int(f.read().strip())
+                        if val > 0:
+                            npu_temp = round(val / 1000.0, 1)
+                            break
+                except Exception:
+                    pass
+
+        # Check for sensor labels referencing npu/xdna/aie
+        if npu_temp is None:
+            for lf in sorted(glob.glob(os.path.join(hwmon, "temp*_label"))):
+                try:
+                    with open(lf, "r") as f:
+                        lbl = f.read().strip().lower()
+                    if any(k in lbl for k in ("npu", "xdna", "aie")):
+                        tf = lf.replace("_label", "_input")
+                        if os.path.exists(tf):
+                            with open(tf, "r") as f:
+                                val = int(f.read().strip())
+                                if val > 0:
+                                    npu_temp = round(val / 1000.0, 1)
+                                    break
+                except Exception:
+                    pass
 
     # Fallback for CPU temperature from thermal zones if not found
     if cpu_temp is None:
@@ -203,7 +232,93 @@ def get_temperatures():
             except Exception:
                 pass
 
-    return cpu_temp, gpu_temp
+    # Fallback for NPU temperature from accel hwmon or thermal zones
+    if npu_temp is None:
+        for tp in sorted(glob.glob("/sys/class/accel/accel[0-9]/device/hwmon/hwmon*/temp*_input")):
+            try:
+                with open(tp, "r") as f:
+                    val = int(f.read().strip())
+                    if val > 0:
+                        npu_temp = round(val / 1000.0, 1)
+                        break
+            except Exception:
+                pass
+
+    if npu_temp is None:
+        for tz in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
+            type_path = os.path.join(tz, "type")
+            temp_path = os.path.join(tz, "temp")
+            if os.path.exists(type_path) and os.path.exists(temp_path):
+                try:
+                    with open(type_path, "r") as f:
+                        tz_type = f.read().strip().lower()
+                    if any(k in tz_type for k in ("npu", "xdna", "aie", "accel")):
+                        with open(temp_path, "r") as f:
+                            val = int(f.read().strip())
+                            if val > 0:
+                                npu_temp = round(val / 1000.0, 1)
+                                break
+                except Exception:
+                    pass
+
+    # On integrated APU (AMD Strix Halo / Ryzen AI Max+ 395), NPU shares package thermal dissipation
+    if npu_temp is None and cpu_temp is not None:
+        npu_temp = cpu_temp
+
+    return cpu_temp, gpu_temp, npu_temp
+
+
+def get_npu_busy_percent():
+    stat_file = "/dev/shm/evo_npu_stat"
+    for accel in sorted(glob.glob("/sys/class/accel/accel[0-9]/device")):
+        for cand in ("npu_busy_percent", "busy_percent", "utilization", "load"):
+            p = os.path.join(accel, cand)
+            if os.path.exists(p):
+                try:
+                    with open(p, "r") as f:
+                        return float(f.read().strip())
+                except Exception:
+                    pass
+        act_p = os.path.join(accel, "power/runtime_active_time")
+        sus_p = os.path.join(accel, "power/runtime_suspended_time")
+        if os.path.exists(act_p) and os.path.exists(sus_p):
+            try:
+                with open(act_p, "r") as f:
+                    act = int(f.read().strip())
+                with open(sus_p, "r") as f:
+                    sus = int(f.read().strip())
+                prev_act, prev_sus = None, None
+                if os.path.exists(stat_file):
+                    try:
+                        with open(stat_file, "r") as f:
+                            parts = f.read().split()
+                            if len(parts) >= 2:
+                                prev_act, prev_sus = int(parts[0]), int(parts[1])
+                    except Exception:
+                        pass
+                try:
+                    with open(stat_file, "w") as f:
+                        f.write(f"{act} {sus}\n")
+                except Exception:
+                    pass
+                if prev_act is not None and prev_sus is not None:
+                    d_act = act - prev_act
+                    d_sus = sus - prev_sus
+                    d_tot = d_act + d_sus
+                    if d_tot > 0:
+                        pct = round(100.0 * d_act / d_tot, 1)
+                        return max(0.0, min(100.0, pct))
+                status_p = os.path.join(accel, "power/runtime_status")
+                if os.path.exists(status_p):
+                    try:
+                        with open(status_p, "r") as f:
+                            if f.read().strip() == "active":
+                                return 100.0
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    return 0.0
 
 
 def get_system_stats():
@@ -268,8 +383,9 @@ def get_system_stats():
     except Exception:
         load_avg = [0.0, 0.0, 0.0]
 
-    cpu_temp, gpu_temp = get_temperatures()
+    cpu_temp, gpu_temp, npu_temp = get_temperatures()
     cpu_busy = get_cpu_busy_percent(load_avg)
+    npu_busy = get_npu_busy_percent()
 
     return {
         "memory": {
@@ -287,6 +403,11 @@ def get_system_stats():
             "gtt_used_mb": round(gtt_used_b / (1024 * 1024), 1),
             "gtt_total_mb": round(gtt_total_b / (1024 * 1024), 1),
         },
+        "npu": {
+            "device": "AMD XDNA NPU (Ryzen AI Max+ 395)",
+            "busy_percent": npu_busy,
+            "temp_c": npu_temp,
+        },
         "cpu": {
             "busy_percent": cpu_busy,
             "temp_c": cpu_temp,
@@ -295,6 +416,7 @@ def get_system_stats():
         "temperatures": {
             "cpu_c": cpu_temp,
             "gpu_c": gpu_temp,
+            "npu_c": npu_temp,
         },
         "load_avg": load_avg,
     }

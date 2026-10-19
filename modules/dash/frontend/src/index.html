@@ -30,48 +30,37 @@
       </div>
     </header>
 
-    <!-- Telemetry: one live time-series chart per metric -->
-    <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="System telemetry">
+    <!-- Telemetry: 3 cards (Memory, Load, Temps) with interactive togglable series chips -->
+    <section class="grid grid-cols-1 gap-4 lg:grid-cols-3" aria-label="System telemetry">
       <article class="card bg-base-200 shadow" data-metric="ram">
-        <div class="card-body gap-1 p-4">
-          <div class="flex items-baseline justify-between gap-2">
-            <h2 class="card-title text-sm font-semibold opacity-70">Unified RAM (128GB)</h2>
-            <output class="font-mono text-sm font-bold" data-value>--</output>
+        <div class="card-body gap-1.5 p-4">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="card-title text-sm font-semibold opacity-70">Memory</h2>
+            <div class="flex flex-wrap items-center gap-1.5" data-value></div>
           </div>
-          <figure class="h-24 w-full" data-chart></figure>
-          <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
-        </div>
-      </article>
-
-      <article class="card bg-base-200 shadow" data-metric="vram">
-        <div class="card-body gap-1 p-4">
-          <div class="flex items-baseline justify-between gap-2">
-            <h2 class="card-title text-sm font-semibold opacity-70">VRAM + GTT</h2>
-            <output class="font-mono text-sm font-bold" data-value>--</output>
-          </div>
-          <figure class="h-24 w-full" data-chart></figure>
+          <figure class="h-28 w-full" data-chart></figure>
           <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
         </div>
       </article>
 
       <article class="card bg-base-200 shadow" data-metric="load">
-        <div class="card-body gap-1 p-4">
-          <div class="flex items-baseline justify-between gap-2">
-            <h2 class="card-title text-sm font-semibold opacity-70">Load (CPU + GPU)</h2>
-            <output class="font-mono text-sm font-bold" data-value>--</output>
+        <div class="card-body gap-1.5 p-4">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="card-title text-sm font-semibold opacity-70">Load</h2>
+            <div class="flex flex-wrap items-center gap-1.5" data-value></div>
           </div>
-          <figure class="h-24 w-full" data-chart></figure>
+          <figure class="h-28 w-full" data-chart></figure>
           <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
         </div>
       </article>
 
       <article class="card bg-base-200 shadow" data-metric="temp">
-        <div class="card-body gap-1 p-4">
-          <div class="flex items-baseline justify-between gap-2">
-            <h2 class="card-title text-sm font-semibold opacity-70">Temps (CPU + GPU)</h2>
-            <output class="font-mono text-sm font-bold" data-value>--</output>
+        <div class="card-body gap-1.5 p-4">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="card-title text-sm font-semibold opacity-70">Temps</h2>
+            <div class="flex flex-wrap items-center gap-1.5" data-value></div>
           </div>
-          <figure class="h-24 w-full" data-chart></figure>
+          <figure class="h-28 w-full" data-chart></figure>
           <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
         </div>
       </article>
