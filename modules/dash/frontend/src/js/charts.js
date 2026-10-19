@@ -96,11 +96,11 @@ function updateChipState(chartId, seriesKey) {
   const dot = chip.querySelector("[data-series-dot]");
   if (isHidden) {
     chip.className =
-      "badge badge-sm cursor-pointer select-none gap-1 font-mono text-xs transition-all border border-dashed border-base-content/25 bg-transparent text-base-content/50 opacity-40 hover:opacity-75 line-through";
+      "badge badge-sm flex-1 justify-center cursor-pointer select-none gap-1 font-mono text-[11px] sm:text-xs transition-all border border-dashed border-base-content/25 bg-transparent text-base-content/50 opacity-40 hover:opacity-75 line-through whitespace-nowrap min-w-0 px-1 sm:px-2";
     if (dot) dot.style.opacity = "0.2";
   } else {
     chip.className =
-      "badge badge-sm cursor-pointer select-none gap-1 font-mono text-xs transition-all border border-base-content/15 bg-base-300/80 hover:bg-base-300 text-base-content shadow-xs";
+      "badge badge-sm flex-1 justify-center cursor-pointer select-none gap-1 font-mono text-[11px] sm:text-xs transition-all border border-base-content/15 bg-base-300/80 hover:bg-base-300 text-base-content shadow-xs whitespace-nowrap min-w-0 px-1 sm:px-2";
     if (dot) dot.style.opacity = "1";
   }
 }
@@ -132,11 +132,11 @@ function buildLegendChips(chartDef, valueEl) {
     chip.type = "button";
     chip.dataset.seriesKey = sDef.key;
     chip.className =
-      "badge badge-sm cursor-pointer select-none gap-1 font-mono text-xs transition-all border border-base-content/15 bg-base-300/80 hover:bg-base-300 text-base-content shadow-xs";
+      "badge badge-sm flex-1 justify-center cursor-pointer select-none gap-1 font-mono text-[11px] sm:text-xs transition-all border border-base-content/15 bg-base-300/80 hover:bg-base-300 text-base-content shadow-xs whitespace-nowrap min-w-0 px-1 sm:px-2";
     chip.title = `Click to hide ${sDef.label}`;
     chip.setAttribute("aria-pressed", "true");
     chip.innerHTML = `
-      <span class="inline-block h-2 w-2 rounded-full shrink-0 transition-opacity" data-series-dot style="background-color: ${hex}"></span>
+      <span class="inline-block h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full shrink-0 transition-opacity" data-series-dot style="background-color: ${hex}"></span>
       <span class="${colorCls} font-semibold">${sDef.label}</span>
       <span class="font-bold ml-0.5" data-series-val="${sDef.key}">--</span>
     `;

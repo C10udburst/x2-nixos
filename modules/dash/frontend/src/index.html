@@ -33,34 +33,34 @@
     <!-- Telemetry: 3 cards (Memory, Load, Temps) with interactive togglable series chips -->
     <section class="grid grid-cols-1 gap-4 lg:grid-cols-3" aria-label="System telemetry">
       <article class="card bg-base-200 shadow" data-metric="ram">
-        <div class="card-body gap-1.5 p-4">
-          <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="card-body gap-2 p-4">
+          <div class="flex flex-col gap-1.5">
             <h2 class="card-title text-sm font-semibold opacity-70">Memory</h2>
-            <div class="flex flex-wrap items-center gap-1.5" data-value></div>
+            <div class="flex w-full items-center gap-1 sm:gap-1.5" data-value></div>
           </div>
-          <figure class="h-28 w-full" data-chart></figure>
+          <figure class="h-28 w-full shrink-0" data-chart></figure>
           <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
         </div>
       </article>
 
       <article class="card bg-base-200 shadow" data-metric="load">
-        <div class="card-body gap-1.5 p-4">
-          <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="card-body gap-2 p-4">
+          <div class="flex flex-col gap-1.5">
             <h2 class="card-title text-sm font-semibold opacity-70">Load</h2>
-            <div class="flex flex-wrap items-center gap-1.5" data-value></div>
+            <div class="flex w-full items-center gap-1 sm:gap-1.5" data-value></div>
           </div>
-          <figure class="h-28 w-full" data-chart></figure>
+          <figure class="h-28 w-full shrink-0" data-chart></figure>
           <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
         </div>
       </article>
 
       <article class="card bg-base-200 shadow" data-metric="temp">
-        <div class="card-body gap-1.5 p-4">
-          <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="card-body gap-2 p-4">
+          <div class="flex flex-col gap-1.5">
             <h2 class="card-title text-sm font-semibold opacity-70">Temps</h2>
-            <div class="flex flex-wrap items-center gap-1.5" data-value></div>
+            <div class="flex w-full items-center gap-1 sm:gap-1.5" data-value></div>
           </div>
-          <figure class="h-28 w-full" data-chart></figure>
+          <figure class="h-28 w-full shrink-0" data-chart></figure>
           <p class="truncate text-xs opacity-50" data-sub>&nbsp;</p>
         </div>
       </article>
