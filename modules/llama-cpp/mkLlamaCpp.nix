@@ -46,6 +46,8 @@
       FIRST_SHARD="$TARGET_PATH"
     elif [ -f "${modelPath}" ]; then
       FIRST_SHARD="${modelPath}"
+    elif [ -d "$(dirname "$TARGET_PATH")" ] && [ -n "$(${pkgs.findutils}/bin/find "$(dirname "$TARGET_PATH")" -maxdepth 1 -type f -name "*.gguf" 2>/dev/null | ${pkgs.coreutils}/bin/head -n 1)" ]; then
+      FIRST_SHARD=$(${pkgs.findutils}/bin/find "$(dirname "$TARGET_PATH")" -maxdepth 1 -type f -name "*.gguf" | ${pkgs.coreutils}/bin/sort | ${pkgs.coreutils}/bin/head -n 1)
     else
       echo "Error: Model path $TARGET_PATH does not exist!" >&2
       exit 1

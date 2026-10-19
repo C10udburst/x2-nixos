@@ -43,14 +43,16 @@
         socket_unit = "comfyui-listener.socket";
         description = "ComfyUI generative AI studio";
       });
-    models = lib.mapAttrs (_: m: {
-      service_name = m.serviceName;
-      remapped_model = m.remappedModel;
-      url = m.url;
-      description = m.description;
-      type = m.type;
-      sessions = m.sessions;
-    }) config.services.models;
+    models =
+      lib.mapAttrs (_: m: {
+        service_name = m.serviceName;
+        remapped_model = m.remappedModel;
+        url = m.url;
+        description = m.description;
+        type = m.type;
+        sessions = m.sessions;
+      })
+      config.services.models;
   };
 
   modelsJsonFile = pkgs.writeText "models-registry.json" (builtins.toJSON modelsConfig);
@@ -61,15 +63,17 @@
   # Classic OpenAI /v1/models payload generated at Nix eval time
   openaiModelsJson = {
     object = "list";
-    data = lib.mapAttrsToList (name: _: {
-      id = name;
-      object = "model";
-      created = 1700000000;
-      owned_by = "evo-x2";
-      permission = [];
-      root = name;
-      parent = null;
-    }) config.services.models;
+    data =
+      lib.mapAttrsToList (name: _: {
+        id = name;
+        object = "model";
+        created = 1700000000;
+        owned_by = "evo-x2";
+        permission = [];
+        root = name;
+        parent = null;
+      })
+      config.services.models;
   };
   openaiModelsJsonFile = pkgs.writeText "openai-models.json" (builtins.toJSON openaiModelsJson);
 
@@ -223,6 +227,20 @@ in {
 
         # 5. Ultra-fast Bash + jq Model Switcher (/v1/* inference hot path)
         locations."/v1/" = {
+          extraConfig = ''
+            fastcgi_pass unix:/run/fcgiwrap-gateway.sock;
+            include ${pkgs.nginx}/conf/fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME ${switcherScript};
+            fastcgi_buffering off;
+            fastcgi_read_timeout 600s;
+            fastcgi_send_timeout 600s;
+            client_body_timeout 600s;
+            client_max_body_size 0;
+          '';
+        };
+
+        # 6. Native llama.cpp /completion endpoint
+        locations."= /completion" = {
           extraConfig = ''
             fastcgi_pass unix:/run/fcgiwrap-gateway.sock;
             include ${pkgs.nginx}/conf/fastcgi_params;

@@ -31,6 +31,13 @@ if [ -n "$BODY" ]; then
   REQ_MODEL=$(printf '%s' "$BODY" | jq -r '.model // empty' 2>/dev/null || true)
 fi
 
+if [ -z "$REQ_MODEL" ] && [ -n "${QUERY_STRING:-}" ]; then
+  REQ_MODEL=$(printf '%s' "$QUERY_STRING" | grep -oP '(^|&)model=\K[^&]+' 2>/dev/null || true)
+fi
+if [ -z "$REQ_MODEL" ] && [ -n "${HTTP_X_MODEL:-}" ]; then
+  REQ_MODEL="$HTTP_X_MODEL"
+fi
+
 # Fallback to default_model or currently active model
 if [ -z "$REQ_MODEL" ] && [ -f "$CONFIG_FILE" ]; then
   REQ_MODEL=$(jq -r '.default_model // empty' "$CONFIG_FILE" 2>/dev/null || true)

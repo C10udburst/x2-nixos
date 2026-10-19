@@ -51,7 +51,10 @@
     TARGET_PATH="${modelsDir}/${modelPath}"
 
     if [ -d "$TARGET_PATH" ]; then
-      FIRST_SHARD=$(${pkgs.findutils}/bin/find "$TARGET_PATH" -maxdepth 1 -type f -name "*.gguf" | ${pkgs.coreutils}/bin/sort | ${pkgs.coreutils}/bin/head -n 1)
+      FIRST_SHARD=$(${pkgs.findutils}/bin/find "$TARGET_PATH" -maxdepth 1 -type f -name "*.gguf" ! -iname "*dflash*" ! -iname "*dspark*" ! -iname "*mtp*" ! -iname "*mmproj*" | ${pkgs.coreutils}/bin/sort | ${pkgs.coreutils}/bin/head -n 1)
+      if [ -z "$FIRST_SHARD" ]; then
+        FIRST_SHARD=$(${pkgs.findutils}/bin/find "$TARGET_PATH" -maxdepth 1 -type f -name "*.gguf" | ${pkgs.coreutils}/bin/sort | ${pkgs.coreutils}/bin/head -n 1)
+      fi
       if [ -z "$FIRST_SHARD" ]; then
         echo "Error: No .gguf model found in $TARGET_PATH" >&2
         exit 1
@@ -60,6 +63,8 @@
       FIRST_SHARD="$TARGET_PATH"
     elif [ -f "${modelPath}" ]; then
       FIRST_SHARD="${modelPath}"
+    elif [ -d "$(dirname "$TARGET_PATH")" ] && [ -n "$(${pkgs.findutils}/bin/find "$(dirname "$TARGET_PATH")" -maxdepth 1 -type f -name "*.gguf" 2>/dev/null | ${pkgs.coreutils}/bin/head -n 1)" ]; then
+      FIRST_SHARD=$(${pkgs.findutils}/bin/find "$(dirname "$TARGET_PATH")" -maxdepth 1 -type f -name "*.gguf" ! -iname "*dflash*" ! -iname "*dspark*" ! -iname "*mtp*" ! -iname "*mmproj*" 2>/dev/null | ${pkgs.coreutils}/bin/sort | ${pkgs.coreutils}/bin/head -n 1)
     else
       echo "Error: Model path $TARGET_PATH does not exist!" >&2
       exit 1
@@ -115,8 +120,18 @@
 
     ${lib.optionalString (dsparkModelPath != null) ''
       DSPARK_PATH="${modelsDir}/${dsparkModelPath}"
-      if [ ! -f "$DSPARK_PATH" ] && [ -f "${dsparkModelPath}" ]; then
+      if [ -d "$DSPARK_PATH" ]; then
+        DSPARK_FILE=$(${pkgs.findutils}/bin/find "$DSPARK_PATH" -maxdepth 1 -type f \( -iname "*dspark*" -o -name "*.gguf" \) | ${pkgs.coreutils}/bin/head -n 1)
+        if [ -n "$DSPARK_FILE" ]; then
+          DSPARK_PATH="$DSPARK_FILE"
+        fi
+      elif [ ! -f "$DSPARK_PATH" ] && [ -f "${dsparkModelPath}" ]; then
         DSPARK_PATH="${dsparkModelPath}"
+      elif [ ! -f "$DSPARK_PATH" ] && [ -d "$(dirname "$DSPARK_PATH")" ]; then
+        DSPARK_FILE=$(${pkgs.findutils}/bin/find "$(dirname "$DSPARK_PATH")" -maxdepth 1 -type f -iname "*dspark*" 2>/dev/null | ${pkgs.coreutils}/bin/head -n 1)
+        if [ -n "$DSPARK_FILE" ]; then
+          DSPARK_PATH="$DSPARK_FILE"
+        fi
       fi
       ARGS+=(--dspark-model "$DSPARK_PATH")
     ''}

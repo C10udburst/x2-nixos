@@ -2,10 +2,9 @@
   config,
   lib,
   pkgs,
-  inputs ? { },
+  inputs ? {},
   ...
-}:
-let
+}: let
   mkGufo = import ./gufo/mkGufo.nix {
     inherit
       pkgs
@@ -14,7 +13,7 @@ let
       inputs
       ;
   };
-  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix { inherit pkgs lib config; };
+  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix {inherit pkgs lib config;};
   mkKyojin = import ./kyojin/mkKyojin.nix {
     inherit
       pkgs
@@ -23,8 +22,7 @@ let
       inputs
       ;
   };
-in
-{
+in {
   imports = [
     ./workload-manager.nix
     ./gufo
@@ -79,7 +77,7 @@ in
           };
         }
       );
-      default = { };
+      default = {};
       description = "Global map of model_id -> { serviceName, remappedModel, url, systemdService, ... }";
     };
   };
@@ -90,20 +88,21 @@ in
     };
 
     # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
-    systemd.services = lib.mapAttrs' (
-      _: m:
-      let
-        unitAttr = lib.removeSuffix ".service" m.serviceName;
-        otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
-      in
-      lib.nameValuePair unitAttr (
-        m.systemdService
-        // {
-          conflicts = (m.systemdService.conflicts or [ ]) ++ otherUnits;
-          wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
-        }
+    systemd.services =
+      lib.mapAttrs' (
+        _: m: let
+          unitAttr = lib.removeSuffix ".service" m.serviceName;
+          otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
+        in
+          lib.nameValuePair unitAttr (
+            m.systemdService
+            // {
+              conflicts = (m.systemdService.conflicts or []) ++ otherUnits;
+              wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
+            }
+          )
       )
-    ) config.services.models;
+      config.services.models;
 
     # Global models map definition
     services.models = {
@@ -228,6 +227,32 @@ in
         numDraft = 2;
         sessions = 1;
         uncensor = true;
+      };
+
+      # 10. Humanizer 12B v2 (fine-tuned Gemma 4 12B) text humanization model
+      "humanizer" = mkLlamaCpp {
+        modelId = "humanizer";
+        description = "Humanizer 12B v2 (Q8_0) - Text humanizer via llama-server";
+        modelPath = "humanizer/humanizer-12b-Q8_0.gguf";
+        context = 8192;
+        cacheTypeK = "q8_0";
+        cacheTypeV = "q8_0";
+        gpuLayers = 99;
+        parallel = 1;
+        flashAttention = true;
+        threads = 16;
+        jinja = true;
+      };
+
+      # 11. DeepSeek V4 Flash (IQ2XXS, 80.76 GiB) with DSpark speculative decoding
+      "deepseek-v4-flash" = mkGufo {
+        modelId = "deepseek-v4-flash";
+        description = "DeepSeek V4 Flash IQ2XXS (80.76 GiB) with DSpark speculative decoding";
+        modelPath = "deepseek-v4-flash/DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf";
+        speculative = "dspark";
+        dsparkModelPath = "deepseek-v4-flash/DeepSeek-V4-Flash-DSpark-support-0731.gguf";
+        context = 131072; # Maximum native context length (128K tokens) verified on 128GB Strix Halo
+        sessions = 1;
       };
     };
   };
