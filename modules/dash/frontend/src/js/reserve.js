@@ -307,37 +307,61 @@ function renderCalendarView(state) {
   const now = new Date(state.server_time * 1000);
   const curWeekday = (now.getDay() + 6) % 7; // Mon=0 .. Sun=6
 
-  // 8-column grid: 1 col for time labels, 7 cols for days
+  // Header row: 1 fixed Time column + 7 equal day columns
   let html = `
-    <div class="grid grid-cols-8 border-b border-base-300 bg-base-300/40 text-center font-mono text-xs py-2">
-      <div class="opacity-50">Time</div>
-      ${dayNames
-        .map(
-          (d, idx) => `
-        <div class="${idx === curWeekday ? "text-primary font-bold underline" : "opacity-80"}">
-          ${d} ${idx === curWeekday ? '<span class="text-[10px] block opacity-60">Today</span>' : ""}
-        </div>
-      `,
-        )
-        .join("")}
+    <div class="flex border-b border-base-300 bg-base-300/60 font-mono text-xs select-none">
+      <div class="w-16 shrink-0 py-2.5 text-center font-bold opacity-60 border-r border-base-300">Time</div>
+      <div class="grid grid-cols-7 flex-1 divide-x divide-base-300 text-center">
+        ${dayNames
+          .map(
+            (d, idx) => `
+          <div class="py-2.5 ${idx === curWeekday ? "bg-primary/10 text-primary font-bold" : "opacity-80"}">
+            <span class="text-xs uppercase">${d}</span>
+            ${idx === curWeekday ? '<span class="badge badge-primary badge-xs block mx-auto mt-0.5 font-bold">Today</span>' : ""}
+          </div>
+        `,
+          )
+          .join("")}
+      </div>
     </div>
-    <div class="relative grid grid-cols-8 divide-x divide-base-300 text-xs font-mono">
+    <div class="flex h-[768px] relative bg-base-100 overflow-hidden font-mono text-xs select-none">
   `;
 
-  // Time rows (24 hours in 2-hour increments)
-  const hours = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22];
-
-  html += `<div class="flex flex-col divide-y divide-base-300 opacity-50 bg-base-200/50">`;
-  for (const h of hours) {
-    html += `<div class="h-12 flex items-center justify-center text-[10px]">${String(h).padStart(2, "0")}:00</div>`;
+  // Left Time Column: 24 hourly rows (32px each -> exactly 768px)
+  html += `<div class="w-16 shrink-0 flex flex-col divide-y divide-base-300/40 bg-base-200/50 border-r border-base-300 z-20">`;
+  for (let h = 0; h < 24; h++) {
+    const isEven = h % 2 === 0;
+    html += `<div class="h-8 flex items-center justify-center text-[10px] ${isEven ? "font-bold opacity-80" : "opacity-50"}">${String(h).padStart(2, "0")}:00</div>`;
   }
   html += `</div>`;
 
-  // For each day (0..6), render slot blocks
-  for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
-    html += `<div class="relative h-[288px] border-b border-base-300 bg-base-100">`;
+  // 7 Day Columns
+  html += `<div class="grid grid-cols-7 flex-1 divide-x divide-base-300 h-full relative">`;
 
-    // Render recurring slots matching this day
+  for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
+    const isToday = dayIdx === curWeekday;
+    html += `<div class="relative h-full ${isToday ? "bg-primary/[0.03]" : ""}">`;
+
+    // 1. Background horizontal hour grid lines (24 rows * 32px = 768px)
+    html += `<div class="absolute inset-0 flex flex-col divide-y divide-base-300/40 pointer-events-none">`;
+    for (let h = 0; h < 24; h++) {
+      html += `<div class="h-8 hover:bg-base-300/20 transition-colors"></div>`;
+    }
+    html += `</div>`;
+
+    // 2. Live "Now" indicator line if today
+    if (isToday) {
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const nowTopPct = (nowMin / 1440) * 100;
+      html += `
+        <div class="absolute left-0 right-0 z-30 border-t-2 border-error pointer-events-none flex items-center"
+          style="top: ${nowTopPct.toFixed(2)}%;">
+          <span class="badge badge-error badge-xs font-mono text-[9px] -top-2 relative font-bold text-white shadow">Now</span>
+        </div>
+      `;
+    }
+
+    // 3. Render recurring slots matching this day
     for (const slot of state.schedule || []) {
       const days = slot.days_of_week;
       const isDayMatch = days === "*" || days.split(",").map((s) => s.trim()).includes(String(dayIdx));
@@ -346,22 +370,26 @@ function renderCalendarView(state) {
         const [eh, em] = slot.end_time.split(":").map(Number);
         const startMin = sh * 60 + sm;
         const endMin = (eh < sh ? eh + 24 : eh) * 60 + em;
+        const durMin = endMin - startMin;
         const topPct = (startMin / 1440) * 100;
-        const heightPct = Math.max(4, ((endMin - startMin) / 1440) * 100);
+        const heightPct = Math.max(3.5, (durMin / 1440) * 100);
 
         html += `
-          <div class="absolute left-1 right-1 rounded bg-primary/25 border border-primary text-primary-content p-1 overflow-hidden shadow-sm hover:z-20 cursor-default"
-            style="top: ${topPct.toFixed(1)}%; height: ${heightPct.toFixed(1)}%;"
-            title="${escapeHtml(slot.title)} (${slot.start_time} - ${slot.end_time}) by ${escapeHtml(slot.client_name)}">
-            <span class="font-bold block text-[10px] leading-tight text-primary truncate">${escapeHtml(slot.title)}</span>
-            <span class="text-[9px] opacity-75 block text-primary truncate">${slot.start_time}-${slot.end_time}</span>
+          <div class="absolute left-1 right-1 rounded-md bg-primary/20 border-2 border-primary text-primary-content p-2 overflow-hidden shadow-md hover:z-30 hover:bg-primary/30 transition-all flex flex-col justify-between"
+            style="top: ${topPct.toFixed(2)}%; height: ${heightPct.toFixed(2)}%;"
+            title="${escapeHtml(slot.title)} (${slot.start_time} - ${slot.end_time}) • By ${escapeHtml(slot.client_name)}">
+            <div class="flex flex-col overflow-hidden">
+              <span class="font-bold text-xs leading-tight text-primary truncate">${escapeHtml(slot.title)}</span>
+              <span class="font-mono text-[11px] text-primary/80 truncate">${slot.start_time} - ${slot.end_time}</span>
+            </div>
+            <span class="text-[10px] text-primary/70 truncate">Owner: ${escapeHtml(slot.client_name)}</span>
           </div>
         `;
       }
     }
 
-    // If day is today and active lease is running, render active block
-    if (dayIdx === curWeekday && state.active) {
+    // 4. Render active lease if today
+    if (isToday && state.active) {
       const act = state.active;
       const startD = new Date(act.started_at * 1000);
       const startMin = startD.getHours() * 60 + startD.getMinutes();
@@ -370,14 +398,17 @@ function renderCalendarView(state) {
         durMin = Math.max(15, Math.round((act.expires_at - act.started_at) / 60));
       }
       const topPct = (startMin / 1440) * 100;
-      const heightPct = Math.max(5, (durMin / 1440) * 100);
+      const heightPct = Math.max(4.0, (durMin / 1440) * 100);
 
       html += `
-        <div class="absolute left-1 right-1 rounded bg-warning/30 border border-warning text-warning-content p-1 overflow-hidden shadow-sm hover:z-20 animate-pulse"
-          style="top: ${topPct.toFixed(1)}%; height: ${heightPct.toFixed(1)}%;"
-          title="Active Lease: ${escapeHtml(act.client_name)} (${durMin}m)">
-          <span class="font-bold block text-[10px] leading-tight text-warning truncate">Active: ${escapeHtml(act.client_name)}</span>
-          <span class="text-[9px] opacity-80 block text-warning truncate">Live lease</span>
+        <div class="absolute left-1 right-1 rounded-md bg-warning/30 border-2 border-warning text-warning-content p-2 overflow-hidden shadow-lg hover:z-30 transition-all animate-pulse flex flex-col justify-between"
+          style="top: ${topPct.toFixed(2)}%; height: ${heightPct.toFixed(2)}%;"
+          title="Live Active Lease: ${escapeHtml(act.client_name)} (${durMin}m)">
+          <div class="flex flex-col overflow-hidden">
+            <span class="font-bold text-xs leading-tight text-warning truncate">🟢 Live Active Lease</span>
+            <span class="font-mono text-[11px] text-warning/90 truncate">${escapeHtml(act.client_name)}</span>
+          </div>
+          <span class="text-[10px] text-warning/80 truncate">${durMin}m exclusive window</span>
         </div>
       `;
     }
@@ -385,7 +416,7 @@ function renderCalendarView(state) {
     html += `</div>`;
   }
 
-  html += `</div>`;
+  html += `</div></div>`;
   container.innerHTML = html;
 
   // Render Recurring Schedule Table
@@ -852,20 +883,93 @@ function setupFormHandlers() {
   // Recurring Modal
   const btnOpenRec = document.getElementById("btn-open-recurring-modal");
   const modalRec = document.getElementById("modal-recurring");
+  const recError = document.getElementById("recurring-error");
+
   if (btnOpenRec && modalRec) {
-    btnOpenRec.addEventListener("click", () => modalRec.showModal());
+    btnOpenRec.addEventListener("click", () => {
+      if (recError) recError.classList.add("hidden");
+      modalRec.showModal();
+    });
+  }
+
+  // Quick Days preset buttons
+  const btnDaysWeekdays = document.getElementById("btn-days-weekdays");
+  const btnDaysAll = document.getElementById("btn-days-all");
+  const btnDaysClear = document.getElementById("btn-days-clear");
+
+  if (btnDaysWeekdays) {
+    btnDaysWeekdays.addEventListener("click", () => {
+      document.querySelectorAll('input[name="rec-day"]').forEach((cb) => {
+        cb.checked = ["0", "1", "2", "3", "4"].includes(cb.value);
+      });
+    });
+  }
+  if (btnDaysAll) {
+    btnDaysAll.addEventListener("click", () => {
+      document.querySelectorAll('input[name="rec-day"]').forEach((cb) => (cb.checked = true));
+    });
+  }
+  if (btnDaysClear) {
+    btnDaysClear.addEventListener("click", () => {
+      document.querySelectorAll('input[name="rec-day"]').forEach((cb) => (cb.checked = false));
+    });
   }
 
   const formRec = document.getElementById("form-recurring");
   if (formRec) {
     formRec.addEventListener("submit", async (e) => {
       e.preventDefault();
+      if (recError) recError.classList.add("hidden");
+
       const title = document.getElementById("recurring-title")?.value?.trim();
       const start = document.getElementById("recurring-start")?.value;
       const end = document.getElementById("recurring-end")?.value;
       const checkedDays = Array.from(document.querySelectorAll('input[name="rec-day"]:checked')).map((c) => c.value);
 
-      if (!title || !start || !end) return;
+      if (!title) {
+        if (recError) {
+          recError.textContent = "Please enter a slot name.";
+          recError.classList.remove("hidden");
+        }
+        return;
+      }
+
+      if (!start || !end || start >= end) {
+        if (recError) {
+          recError.textContent = "Start time must be earlier than end time.";
+          recError.classList.remove("hidden");
+        }
+        return;
+      }
+
+      if (checkedDays.length === 0) {
+        if (recError) {
+          recError.textContent = "Please select at least one day of the week.";
+          recError.classList.remove("hidden");
+        }
+        return;
+      }
+
+      // Client-side collision pre-check against existing schedule
+      const newDaysSet = new Set(checkedDays);
+      const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      for (const s of currentState?.schedule || []) {
+        const sDays = new Set(s.days_of_week === "*" ? ["0", "1", "2", "3", "4", "5", "6"] : s.days_of_week.split(",").map((x) => x.trim()));
+        const commonDays = [...newDaysSet].filter((d) => sDays.has(d));
+        if (commonDays.length > 0) {
+          if (Math.max(start.replace(":", ""), s.start_time.replace(":", "")) < Math.min(end.replace(":", ""), s.end_time.replace(":", ""))) {
+            const daysLabel = commonDays.map((d) => dayNames[Number(d)]).join(", ");
+            const msg = `Schedule collision: overlaps with existing slot '${s.title}' (${s.start_time} - ${s.end_time}) on ${daysLabel}.`;
+            if (recError) {
+              recError.textContent = msg;
+              recError.classList.remove("hidden");
+            }
+            showToast(msg, "error");
+            return;
+          }
+        }
+      }
+
       const daysStr = checkedDays.length === 7 ? "*" : checkedDays.join(",");
 
       try {
@@ -880,6 +984,10 @@ function setupFormHandlers() {
         formRec.reset();
         await syncState();
       } catch (err) {
+        if (recError) {
+          recError.textContent = err.message;
+          recError.classList.remove("hidden");
+        }
         showToast(err.message, "error");
       }
     });

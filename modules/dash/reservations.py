@@ -404,6 +404,45 @@ def main():
                 client_name = ip_to_name(client_ip)
 
                 if not active and not recurring:
+                    # Check for collisions with upcoming scheduled recurring slots
+                    dt_now = datetime.datetime.fromtimestamp(now)
+                    cur_wday = dt_now.weekday()
+                    cursor.execute("SELECT * FROM recurring_slots")
+                    all_slots = cursor.fetchall()
+                    collision_err = None
+
+                    if mode == "timeboxed":
+                        req_end_dt = dt_now + datetime.timedelta(minutes=duration)
+                        for s in all_slots:
+                            s_days = {0, 1, 2, 3, 4, 5, 6} if s["days_of_week"] == "*" else {int(x) for x in s["days_of_week"].split(",") if x.strip().isdigit()}
+                            if cur_wday in s_days:
+                                sh, sm = [int(x) for x in s["start_time"].split(":")]
+                                eh, em = [int(x) for x in s["end_time"].split(":")]
+                                s_start_dt = dt_now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+                                s_end_dt = dt_now.replace(hour=eh, minute=em, second=0, microsecond=0)
+                                if s_end_dt <= s_start_dt:
+                                    s_end_dt += datetime.timedelta(days=1)
+                                if max(dt_now, s_start_dt) < min(req_end_dt, s_end_dt):
+                                    avail_min = max(0, int((s_start_dt - dt_now).total_seconds() / 60))
+                                    collision_err = f"Requested {duration}m collides with scheduled slot '{s['title']}' starting at {s['start_time']}. Maximum available time is {avail_min}m."
+                                    break
+                    elif mode == "semaphore":
+                        cutoff_dt = dt_now + datetime.timedelta(minutes=60)
+                        for s in all_slots:
+                            s_days = {0, 1, 2, 3, 4, 5, 6} if s["days_of_week"] == "*" else {int(x) for x in s["days_of_week"].split(",") if x.strip().isdigit()}
+                            if cur_wday in s_days:
+                                sh, sm = [int(x) for x in s["start_time"].split(":")]
+                                s_start_dt = dt_now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+                                if dt_now <= s_start_dt < cutoff_dt:
+                                    collision_err = f"Cannot acquire indefinite semaphore: scheduled recurring slot '{s['title']}' starts at {s['start_time']}."
+                                    break
+
+                    if collision_err:
+                        send_headers(status="409 Conflict")
+                        sys.stdout.buffer.write(json.dumps({"error": collision_err}).encode("utf-8"))
+                        sys.stdout.buffer.flush()
+                        return
+
                     started_at = now
                     expires_at = (now + duration * 60) if mode == "timeboxed" else None
                     dur_val = duration if mode == "timeboxed" else None
@@ -475,6 +514,31 @@ def main():
                 active = cursor.fetchone()
                 if active and active["expires_at"]:
                     new_exp = max(now, active["expires_at"]) + (minutes * 60)
+                    new_exp_dt = datetime.datetime.fromtimestamp(new_exp)
+                    dt_now = datetime.datetime.fromtimestamp(now)
+                    cur_wday = dt_now.weekday()
+
+                    # Check collision with upcoming scheduled slots
+                    cursor.execute("SELECT * FROM recurring_slots")
+                    all_slots = cursor.fetchall()
+                    for s in all_slots:
+                        s_days = {0, 1, 2, 3, 4, 5, 6} if s["days_of_week"] == "*" else {int(x) for x in s["days_of_week"].split(",") if x.strip().isdigit()}
+                        if cur_wday in s_days:
+                            sh, sm = [int(x) for x in s["start_time"].split(":")]
+                            eh, em = [int(x) for x in s["end_time"].split(":")]
+                            s_start_dt = dt_now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+                            s_end_dt = dt_now.replace(hour=eh, minute=em, second=0, microsecond=0)
+                            if s_end_dt <= s_start_dt:
+                                s_end_dt += datetime.timedelta(days=1)
+                            if max(dt_now, s_start_dt) < min(new_exp_dt, s_end_dt):
+                                avail_min = max(0, int((s_start_dt - datetime.datetime.fromtimestamp(active["expires_at"])).total_seconds() / 60))
+                                send_headers(status="409 Conflict")
+                                sys.stdout.buffer.write(json.dumps({
+                                    "error": f"Cannot extend: collides with scheduled slot '{s['title']}' starting at {s['start_time']}."
+                                }).encode("utf-8"))
+                                sys.stdout.buffer.flush()
+                                return
+
                     new_dur = (active["duration_minutes"] or 0) + minutes
                     cursor.execute("UPDATE reservations SET expires_at = ?, duration_minutes = ? WHERE id = ?", (new_exp, new_dur, active["id"]))
                     conn.commit()
@@ -485,13 +549,50 @@ def main():
                 return
 
             elif action == "recurring":
-                title = str(data.get("title", "Reserved Slot"))[:64]
-                days = str(data.get("days_of_week", "*"))[:32]
-                start_t = str(data.get("start_time", "09:00"))[:5]
-                end_t = str(data.get("end_time", "10:00"))[:5]
+                title = str(data.get("title", "")).strip()[:64]
+                days = str(data.get("days_of_week", "*")).strip()[:32]
+                start_t = str(data.get("start_time", "09:00")).strip()[:5]
+                end_t = str(data.get("end_time", "10:00")).strip()[:5]
+
+                if not title:
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": "Slot title is required."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                if start_t >= end_t:
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": f"Start time ({start_t}) must be earlier than end time ({end_t})."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                new_days = {0, 1, 2, 3, 4, 5, 6} if days == "*" else {int(x) for x in days.split(",") if x.strip().isdigit() and 0 <= int(x.strip()) <= 6}
+                if not new_days:
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": "At least one day must be selected."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM recurring_slots")
+                existing_slots = cursor.fetchall()
+                day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+                # Collision check against existing recurring slots
+                for s in existing_slots:
+                    s_days = {0, 1, 2, 3, 4, 5, 6} if s["days_of_week"] == "*" else {int(x) for x in s["days_of_week"].split(",") if x.strip().isdigit()}
+                    common_days = new_days & s_days
+                    if common_days:
+                        if max(start_t, s["start_time"]) < min(end_t, s["end_time"]):
+                            conflict_days_str = ", ".join(day_names[d] for d in sorted(common_days))
+                            send_headers(status="409 Conflict")
+                            sys.stdout.buffer.write(json.dumps({
+                                "error": f"Schedule collision: overlaps with existing slot '{s['title']}' ({s['start_time']} - {s['end_time']}) on {conflict_days_str}."
+                            }).encode("utf-8"))
+                            sys.stdout.buffer.flush()
+                            return
 
                 client_name = ip_to_name(client_ip)
-                cursor = conn.cursor()
                 cursor.execute(
                     """INSERT INTO recurring_slots (client_ip, client_name, title, days_of_week, start_time, end_time, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",

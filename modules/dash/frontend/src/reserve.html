@@ -274,13 +274,22 @@
           <p class="py-2 text-xs opacity-60">Set a daily or weekday fixed window when this machine is dedicated for your task.</p>
 
           <form id="form-recurring" class="flex flex-col gap-3 mt-2">
+            <div id="recurring-error" class="alert alert-error text-xs py-2 hidden" role="alert"></div>
+
             <div class="form-control">
               <label class="label py-1" for="recurring-title"><span class="label-text text-xs">Slot Name</span></label>
               <input id="recurring-title" class="input input-sm w-full font-mono text-xs" placeholder="e.g. Nightly Batch, Daily Demo" required />
             </div>
 
             <div class="form-control">
-              <label class="label py-1"><span class="label-text text-xs">Days of the Week</span></label>
+              <div class="flex items-center justify-between py-1">
+                <span class="label-text text-xs font-semibold">Days of the Week</span>
+                <div class="flex items-center gap-1 font-mono text-[10px]">
+                  <button type="button" class="btn btn-ghost btn-xs px-1.5" id="btn-days-weekdays">Weekdays</button>
+                  <button type="button" class="btn btn-ghost btn-xs px-1.5" id="btn-days-all">All Days</button>
+                  <button type="button" class="btn btn-ghost btn-xs px-1.5 text-error" id="btn-days-clear">Clear</button>
+                </div>
+              </div>
               <div class="flex flex-wrap gap-2 text-xs">
                 <label class="flex items-center gap-1 cursor-pointer">
                   <input type="checkbox" name="rec-day" value="0" class="checkbox checkbox-xs" checked /> Mon
