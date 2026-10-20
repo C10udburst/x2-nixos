@@ -27,7 +27,6 @@ export const METRICS = [
   { id: "npu", chartId: "load" },
   { id: "cpu_temp", chartId: "temp" },
   { id: "gpu_temp", chartId: "temp" },
-  { id: "npu_temp", chartId: "temp" },
 ];
 
 export const CHARTS = [
@@ -52,7 +51,6 @@ export const CHARTS = [
     series: [
       { key: "cpu_temp", color: "warning", label: "CPU", decimals: 1, unit: "°C", type: "line" },
       { key: "gpu_temp", color: "info", label: "GPU", decimals: 1, unit: "°C", type: "line" },
-      { key: "npu_temp", color: "accent", label: "NPU", decimals: 1, unit: "°C", type: "line" },
     ],
   },
 ];

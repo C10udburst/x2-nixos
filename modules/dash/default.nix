@@ -88,6 +88,15 @@
     exec ${pkgs.python3}/bin/python3 ${./dash.py} "$@"
   '';
 
+  # Dedicated FastCGI Reservations API (zero idle usage, state in SQLite)
+  reservationsScript = pkgs.writeShellScript "ai-reservations-api" ''
+    export PATH="/run/wrappers/bin:${lib.makeBinPath [
+      pkgs.coreutils
+    ]}:$PATH"
+    export RESERVATIONS_DB_PATH="/var/lib/gateway/reservations.db"
+    exec ${pkgs.python3}/bin/python3 ${./reservations.py} "$@"
+  '';
+
   # Ultra-fast Bash + jq Switcher wrapper (hot path for /v1/* inference requests)
   switcherScript = pkgs.writeShellScript "ai-v1-switcher" ''
     export PATH="/run/wrappers/bin:${lib.makeBinPath [
@@ -175,10 +184,11 @@ in {
           client_max_body_size 0;
         '';
 
-        # 1. Static dashboard (index.html is always revalidated)
+        # 1. Static dashboard (index.html & reserve.html are always revalidated)
         locations."/" = {
           root = "${dashboardFrontend}";
           index = "index.html";
+          tryFiles = "$uri $uri.html $uri/ /index.html =404";
           extraConfig = ''
             add_header Cache-Control "no-cache";
           '';
@@ -214,7 +224,18 @@ in {
           '';
         };
 
-        # 4. Python Dashboard API (/api/*) on isolated fastcgi socket
+        # 4a. Python Reservations API (/api/reservations*) on isolated fastcgi socket
+        locations."^~ /api/reservations" = {
+          extraConfig = ''
+            fastcgi_pass unix:/run/fcgiwrap-dash.sock;
+            include ${pkgs.nginx}/conf/fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME ${reservationsScript};
+            fastcgi_buffering off;
+            fastcgi_read_timeout 60s;
+          '';
+        };
+
+        # 4b. Python Dashboard API (/api/*) on isolated fastcgi socket
         locations."/api/" = {
           extraConfig = ''
             fastcgi_pass unix:/run/fcgiwrap-dash.sock;
@@ -254,6 +275,11 @@ in {
         };
       };
     };
+
+    # State directory for gateway and SQLite reservation persistence
+    systemd.tmpfiles.rules = [
+      "d /var/lib/gateway 0755 gateway gateway - -"
+    ];
 
     # Open firewall port
     networking.firewall.allowedTCPPorts = [cfg.port];

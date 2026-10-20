@@ -38,11 +38,6 @@ export function readTelemetry(data) {
 
   const npu = data.npu;
   points.npu = Number.isFinite(npu?.busy_percent) ? npu.busy_percent : 0;
-  if (Number.isFinite(npu?.temp_c)) {
-    points.npu_temp = npu.temp_c;
-  } else if (Number.isFinite(data.temperatures?.npu_c)) {
-    points.npu_temp = data.temperatures.npu_c;
-  }
 
   const cpu = data.cpu;
   if (cpu) {
@@ -60,10 +55,6 @@ export function readTelemetry(data) {
     }
   }
 
-  if (!Number.isFinite(points.npu_temp) && Number.isFinite(points.cpu_temp)) {
-    points.npu_temp = points.cpu_temp;
-  }
-
   if (Array.isArray(data.load_avg)) {
     const [one, five] = data.load_avg;
     subs.load = `1m: ${round(one, 2)} • 5m: ${round(five, 2)} • CPU: ${round(points.cpu ?? 0, 0)}% • GPU: ${round(points.gpu ?? 0, 0)}% • NPU: ${round(points.npu ?? 0, 0)}%`;
@@ -73,8 +64,7 @@ export function readTelemetry(data) {
 
   const cpuTempStr = Number.isFinite(points.cpu_temp) ? `${round(points.cpu_temp, 0)}°C` : "--";
   const gpuTempStr = Number.isFinite(points.gpu_temp) ? `${round(points.gpu_temp, 0)}°C` : "--";
-  const npuTempStr = Number.isFinite(points.npu_temp) ? `${round(points.npu_temp, 0)}°C` : "--";
-  subs.temp = `CPU ${cpuTempStr} • GPU ${gpuTempStr} • NPU ${npuTempStr}`;
+  subs.temp = `CPU ${cpuTempStr} • GPU ${gpuTempStr}`;
 
   return { points, subs };
 }

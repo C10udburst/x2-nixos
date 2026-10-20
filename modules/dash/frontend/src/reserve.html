@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en" data-theme="halloween">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EVO-X2 • LLM Reservation</title>
+  <meta name="description"
+    content="GMKtec EVO-X2 single-workload LLM reservation coordinator with queue, semaphore, and schedule modes." />
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>" />
+  <!-- @app-stylesheet -->
+  <!-- @app-script -->
+</head>
+
+<body class="min-h-screen p-4 md:p-8">
+  <div class="mx-auto flex max-w-6xl flex-col gap-6">
+
+    <!-- Header / Navbar -->
+    <header class="navbar flex-wrap rounded-box bg-base-200 px-4 py-3 shadow">
+      <div class="navbar-start flex-col items-start gap-1">
+        <h1 class="flex flex-wrap items-center gap-2 text-xl font-bold md:text-2xl">
+          GMKtec EVO-X2
+          <span class="badge badge-primary font-mono text-xs">LLM Reservation</span>
+        </h1>
+        <p class="text-xs opacity-60">128GB unified LPDDR5X • Single-Workload Coordinator</p>
+      </div>
+
+      <div class="navbar-end flex flex-wrap items-center gap-2">
+        <div class="flex items-center gap-1.5 rounded-lg bg-base-300 px-2.5 py-1 text-xs">
+          <span class="opacity-60">You:</span>
+          <span id="my-identity" class="font-mono font-bold text-primary">Detecting…</span>
+        </div>
+
+        <button id="btn-notify" class="btn btn-ghost btn-sm font-mono text-xs gap-1.5" type="button"
+          title="Toggle browser desktop notifications">
+          <span id="notify-icon">🔔</span>
+          <span id="notify-label">Notify</span>
+        </button>
+
+        <a href="/" class="btn btn-outline btn-sm font-mono gap-1 text-xs">
+          ← Dashboard
+        </a>
+
+        <span id="status-dot" class="status status-lg status-success animate-pulse tooltip tooltip-left"
+          data-tip="Reservation system live" role="status" aria-live="polite"></span>
+      </div>
+    </header>
+
+    <!-- Subheader: View Switcher Tabs -->
+    <nav class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 pb-3" aria-label="Views">
+      <div class="join bg-base-200 p-1 rounded-box shadow-sm">
+        <button class="join-item btn btn-sm btn-active" data-view-btn="live" type="button">
+          🎛️ Live Control
+        </button>
+        <button class="join-item btn btn-sm" data-view-btn="calendar" type="button">
+          📅 Week Calendar
+        </button>
+        <button class="join-item btn btn-sm" data-view-btn="timeline" type="button">
+          📊 Gantt Timeline
+        </button>
+        <button class="join-item btn btn-sm" data-view-btn="history" type="button">
+          📜 History & Audit
+        </button>
+      </div>
+
+      <div class="flex items-center gap-2 text-xs opacity-60">
+        <span class="inline-block h-2 w-2 rounded-full bg-success animate-ping"></span>
+        <span id="sync-status">Syncing on-demand</span>
+      </div>
+    </nav>
+
+    <!-- ================================================================= -->
+    <!-- VIEW 1: COMPACT / LIVE CONTROL (DEFAULT)                          -->
+    <!-- ================================================================= -->
+    <main id="view-live" class="flex flex-col gap-6">
+
+      <!-- Active Workload Hero Banner -->
+      <section class="card bg-base-200 shadow" aria-label="Current lease status">
+        <div class="card-body gap-4 p-5 md:p-6">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center gap-2">
+                <span id="live-badge" class="badge badge-success font-semibold uppercase text-xs">Available</span>
+                <span id="live-mode-badge" class="badge badge-neutral font-mono text-xs">Idle</span>
+              </div>
+              <h2 id="live-holder-title" class="font-mono text-2xl font-bold text-primary md:text-3xl">
+                Machine Available
+              </h2>
+              <p id="live-holder-desc" class="text-sm opacity-70">
+                No active reservation. You can acquire an exclusive lock or time slot now.
+              </p>
+            </div>
+
+            <!-- Big Countdown / Time Display -->
+            <div class="flex flex-col items-end gap-1 text-right">
+              <div class="text-xs uppercase font-semibold opacity-50">Remaining Time</div>
+              <div id="live-timer" class="font-mono text-3xl font-extrabold tracking-tight md:text-4xl text-base-content">
+                --:--:--
+              </div>
+              <div id="live-timer-sub" class="text-xs opacity-50">Zero background CPU usage</div>
+            </div>
+          </div>
+
+          <!-- Active Holder Quick Actions -->
+          <div id="live-actions" class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-3">
+            <div id="holder-actions" class="flex flex-wrap items-center gap-2">
+              <button id="btn-release" class="btn btn-error btn-sm" type="button" disabled>
+                Release Reservation Early
+              </button>
+              <button id="btn-extend" class="btn btn-outline btn-sm" type="button" disabled>
+                +30m Extension
+              </button>
+            </div>
+
+            <div id="idle-quick-actions" class="flex flex-wrap items-center gap-2">
+              <button id="btn-quick-1h" class="btn btn-primary btn-sm" type="button">
+                ⚡ Quick Acquire 1h
+              </button>
+              <button id="btn-quick-sem" class="btn btn-neutral btn-sm" type="button">
+                🔒 Acquire Semaphore (Indefinite)
+              </button>
+            </div>
+
+            <div id="queue-status-banner" class="hidden flex items-center gap-2 text-xs font-mono text-warning">
+              <span>⏳ You are in the waitlist!</span>
+              <button id="btn-leave-queue" class="btn btn-ghost btn-xs text-error" type="button">Leave Queue</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Grid: Acquire Form & Queue List -->
+      <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+
+        <!-- Acquire / Join Queue Card -->
+        <section class="card bg-base-200 shadow">
+          <div class="card-body gap-4 p-5">
+            <h3 class="card-title text-base font-bold">
+              Reserve or Join Waitlist
+            </h3>
+            <p class="text-xs opacity-60">
+              Acquires the machine immediately if idle, or places your request into the FIFO waitlist.
+            </p>
+
+            <form id="form-reserve" class="flex flex-col gap-4">
+              <!-- Mode Tabs -->
+              <div class="form-control">
+                <label class="label py-1">
+                  <span class="label-text text-xs font-semibold uppercase opacity-60">Reservation Mode</span>
+                </label>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="flex cursor-pointer items-center gap-2 rounded-box border border-base-300 p-2.5 hover:border-primary">
+                    <input type="radio" name="res-mode" value="timeboxed" class="radio radio-primary radio-sm" checked />
+                    <div class="flex flex-col">
+                      <span class="text-xs font-bold">Time-Boxed</span>
+                      <span class="text-[10px] opacity-60">Specific duration & auto-release</span>
+                    </div>
+                  </label>
+                  <label class="flex cursor-pointer items-center gap-2 rounded-box border border-base-300 p-2.5 hover:border-primary">
+                    <input type="radio" name="res-mode" value="semaphore" class="radio radio-primary radio-sm" />
+                    <div class="flex flex-col">
+                      <span class="text-xs font-bold">Semaphore</span>
+                      <span class="text-[10px] opacity-60">Indefinite exclusive lock</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Duration Selector (For Time-Boxed) -->
+              <div id="duration-selector" class="form-control">
+                <label class="label py-1">
+                  <span class="label-text text-xs font-semibold uppercase opacity-60">Duration</span>
+                </label>
+                <div class="flex flex-wrap gap-1.5">
+                  <button type="button" class="btn btn-sm btn-outline duration-chip" data-min="15">15m</button>
+                  <button type="button" class="btn btn-sm btn-outline duration-chip" data-min="30">30m</button>
+                  <button type="button" class="btn btn-sm btn-primary duration-chip" data-min="60">1h</button>
+                  <button type="button" class="btn btn-sm btn-outline duration-chip" data-min="120">2h</button>
+                  <button type="button" class="btn btn-sm btn-outline duration-chip" data-min="240">4h</button>
+                </div>
+                <input id="custom-duration" type="hidden" value="60" />
+              </div>
+
+              <!-- Note / Purpose -->
+              <div class="form-control">
+                <label class="label py-1" for="reserve-note">
+                  <span class="label-text text-xs font-semibold uppercase opacity-60">Purpose / Session Note</span>
+                </label>
+                <input id="reserve-note" class="input input-sm w-full font-mono text-xs" type="text"
+                  placeholder="e.g. Qwen3.8 inference testing, LLM eval benchmark" maxlength="128" />
+              </div>
+
+              <button id="btn-submit-reserve" class="btn btn-primary btn-sm mt-2 font-mono" type="submit">
+                Acquire Exclusive Lock
+              </button>
+            </form>
+          </div>
+        </section>
+
+        <!-- Waitlist Queue Card -->
+        <section class="card bg-base-200 shadow">
+          <div class="card-body gap-3 p-5">
+            <div class="flex items-center justify-between">
+              <h3 class="card-title text-base font-bold">
+                Waitlist Queue
+              </h3>
+              <span id="queue-count-badge" class="badge badge-neutral text-xs font-mono">0 waiting</span>
+            </div>
+            <p class="text-xs opacity-60">
+              When the active holder releases or expires, the next queued client is promoted automatically.
+            </p>
+
+            <div id="queue-empty-msg" class="flex flex-col items-center justify-center p-8 text-center text-xs opacity-40">
+              <span>☕ Queue is empty</span>
+              <span>Machine will be immediately available when released.</span>
+            </div>
+
+            <div id="queue-items-list" class="flex flex-col gap-2 overflow-y-auto max-h-72"></div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+
+    <!-- ================================================================= -->
+    <!-- VIEW 2: CALENDAR / WEEK-AT-A-GLANCE                               -->
+    <!-- ================================================================= -->
+    <main id="view-calendar" class="hidden flex flex-col gap-6">
+
+      <section class="card bg-base-200 shadow">
+        <div class="card-body gap-4 p-5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 class="card-title text-lg font-bold">Week-at-a-Glance Schedule</h2>
+              <p class="text-xs opacity-60">24-hour visual grid of scheduled daily recurring windows and active leases.</p>
+            </div>
+            <button id="btn-open-recurring-modal" class="btn btn-primary btn-sm font-mono text-xs" type="button">
+              + New Daily Slot
+            </button>
+          </div>
+
+          <!-- Calendar Visual Block View -->
+          <div class="overflow-x-auto rounded-box border border-base-300">
+            <div id="calendar-grid" class="min-w-[680px]"></div>
+          </div>
+
+          <!-- Existing Daily Recurring Windows Table -->
+          <div class="flex flex-col gap-2 mt-4 border-t border-base-300 pt-4">
+            <h3 class="text-sm font-semibold opacity-70">Configured Daily Recurring Windows</h3>
+            <div id="schedule-table-empty" class="text-xs opacity-50 py-2">No recurring daily slots configured yet.</div>
+            <div class="overflow-x-auto">
+              <table id="schedule-table" class="table table-sm hidden w-full">
+                <thead>
+                  <tr class="text-xs opacity-60">
+                    <th>Title</th>
+                    <th>Days</th>
+                    <th>Time Window</th>
+                    <th>Owner</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="schedule-table-body" class="font-mono text-xs"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Add Recurring Slot Modal / Card -->
+      <dialog id="modal-recurring" class="modal">
+        <div class="modal-box bg-base-200">
+          <h3 class="font-bold text-lg">Add Daily Recurring Window</h3>
+          <p class="py-2 text-xs opacity-60">Set a daily or weekday fixed window when this machine is dedicated for your task.</p>
+
+          <form id="form-recurring" class="flex flex-col gap-3 mt-2">
+            <div class="form-control">
+              <label class="label py-1" for="recurring-title"><span class="label-text text-xs">Slot Name</span></label>
+              <input id="recurring-title" class="input input-sm w-full font-mono text-xs" placeholder="e.g. Nightly Batch, Daily Demo" required />
+            </div>
+
+            <div class="form-control">
+              <label class="label py-1"><span class="label-text text-xs">Days of the Week</span></label>
+              <div class="flex flex-wrap gap-2 text-xs">
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" name="rec-day" value="0" class="checkbox checkbox-xs" checked /> Mon
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" name="rec-day" value="1" class="checkbox checkbox-xs" checked /> Tue
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" name="rec-day" value="2" class="checkbox checkbox-xs" checked /> Wed
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" name="rec-day" value="3" class="checkbox checkbox-xs" checked /> Thu
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" name="rec-day" value="4" class="checkbox checkbox-xs" checked /> Fri
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" name="rec-day" value="5" class="checkbox checkbox-xs" /> Sat
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" name="rec-day" value="6" class="checkbox checkbox-xs" /> Sun
+                </label>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div class="form-control">
+                <label class="label py-1" for="recurring-start"><span class="label-text text-xs">Start Time (24h)</span></label>
+                <input id="recurring-start" type="time" class="input input-sm font-mono text-xs" value="09:00" required />
+              </div>
+              <div class="form-control">
+                <label class="label py-1" for="recurring-end"><span class="label-text text-xs">End Time (24h)</span></label>
+                <input id="recurring-end" type="time" class="input input-sm font-mono text-xs" value="10:00" required />
+              </div>
+            </div>
+
+            <div class="modal-action">
+              <button class="btn btn-ghost btn-sm" type="button" onclick="document.getElementById('modal-recurring').close()">Cancel</button>
+              <button class="btn btn-primary btn-sm" type="submit">Save Slot</button>
+            </div>
+          </form>
+        </div>
+      </dialog>
+    </main>
+
+    <!-- ================================================================= -->
+    <!-- VIEW 3: TIMELINE / GANTT STRIP                                    -->
+    <!-- ================================================================= -->
+    <main id="view-timeline" class="hidden flex flex-col gap-6">
+
+      <section class="card bg-base-200 shadow">
+        <div class="card-body gap-4 p-5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 class="card-title text-lg font-bold">24-Hour Gantt Timeline</h2>
+              <p class="text-xs opacity-60">Continuous sequence of running lease, queued turns, and upcoming schedule locks.</p>
+            </div>
+            <div class="flex items-center gap-3 text-xs font-mono">
+              <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-warning"></span> Active</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-info"></span> Queued</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-primary"></span> Recurring</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-base-300"></span> Available</span>
+            </div>
+          </div>
+
+          <!-- Gantt Strip Container -->
+          <div class="flex flex-col gap-2 rounded-box border border-base-300 p-4 bg-base-300/40">
+            <!-- Timeline hours axis -->
+            <div id="gantt-axis" class="flex w-full justify-between font-mono text-[11px] opacity-60 pb-1 border-b border-base-300"></div>
+            <!-- Horizontal Gantt bar -->
+            <div id="gantt-track" class="relative h-14 w-full rounded-lg bg-base-100 overflow-hidden shadow-inner flex"></div>
+          </div>
+
+          <!-- Itemized Breakdown Cards -->
+          <div class="flex flex-col gap-2 mt-2">
+            <h3 class="text-xs font-semibold uppercase opacity-60">Projected Sequence</h3>
+            <div id="gantt-breakdown" class="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3"></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- ================================================================= -->
+    <!-- VIEW 4: HISTORY / AUDIT LOG                                       -->
+    <!-- ================================================================= -->
+    <main id="view-history" class="hidden flex flex-col gap-6">
+
+      <section class="card bg-base-200 shadow">
+        <div class="card-body gap-4 p-5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 class="card-title text-lg font-bold">Session History & Audit Log</h2>
+              <p class="text-xs opacity-60">Past sessions (14-day rolling retention) and machine utilization at a glance.</p>
+            </div>
+          </div>
+
+          <!-- Utilization Summary Stats -->
+          <div class="stats stats-vertical sm:stats-horizontal border border-base-300 bg-base-100 shadow-sm w-full">
+            <div class="stat">
+              <div class="stat-title text-xs">Total Recorded Sessions</div>
+              <div id="stat-total-sessions" class="stat-value font-mono text-2xl">0</div>
+              <div class="stat-desc">14-day rolling window</div>
+            </div>
+            <div class="stat">
+              <div class="stat-title text-xs">Total Hours Used</div>
+              <div id="stat-total-hours" class="stat-value font-mono text-2xl text-primary">0h</div>
+              <div class="stat-desc">Exclusive workload runtime</div>
+            </div>
+            <div class="stat">
+              <div class="stat-title text-xs">Last Active Client</div>
+              <div id="stat-last-client" class="stat-value font-mono text-lg text-secondary">None</div>
+              <div class="stat-desc">Most recent completed lease</div>
+            </div>
+          </div>
+
+          <!-- History Table -->
+          <div class="overflow-x-auto rounded-box border border-base-300">
+            <table class="table table-sm w-full">
+              <thead>
+                <tr class="text-xs opacity-60">
+                  <th>Time Ended</th>
+                  <th>Client Alias</th>
+                  <th>Mode</th>
+                  <th>Duration</th>
+                  <th>Status</th>
+                  <th>Note / Purpose</th>
+                </tr>
+              </thead>
+              <tbody id="history-table-body" class="font-mono text-xs">
+                <tr>
+                  <td colspan="6" class="text-center py-6 opacity-40">No past sessions recorded yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Global Toast Alert -->
+    <div id="toast" class="alert fixed bottom-4 right-4 z-50 hidden shadow-xl max-w-sm transition-all" role="alert"></div>
+
+    <!-- Footer -->
+    <footer class="flex flex-col gap-2 border-t border-base-300 pt-4 text-center text-xs opacity-40">
+      <p>GMKtec EVO-X2 • AMD Ryzen AI Max+ 395 128GB Unified Memory • Dynamic Single-Workload Coordinator</p>
+    </footer>
+
+  </div>
+</body>
+
+</html>

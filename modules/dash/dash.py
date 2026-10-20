@@ -136,7 +136,6 @@ def get_cpu_busy_percent(load_avg):
 def get_temperatures():
     cpu_temp = None
     gpu_temp = None
-    npu_temp = None
 
     for hwmon in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
         name_path = os.path.join(hwmon, "name")
@@ -174,34 +173,6 @@ def get_temperatures():
                     except Exception:
                         pass
 
-        if any(k in name for k in ("amdxdna", "xdna", "npu", "accel")):
-            for tf in sorted(glob.glob(os.path.join(hwmon, "temp*_input"))):
-                try:
-                    with open(tf, "r") as f:
-                        val = int(f.read().strip())
-                        if val > 0:
-                            npu_temp = round(val / 1000.0, 1)
-                            break
-                except Exception:
-                    pass
-
-        # Check for sensor labels referencing npu/xdna/aie
-        if npu_temp is None:
-            for lf in sorted(glob.glob(os.path.join(hwmon, "temp*_label"))):
-                try:
-                    with open(lf, "r") as f:
-                        lbl = f.read().strip().lower()
-                    if any(k in lbl for k in ("npu", "xdna", "aie")):
-                        tf = lf.replace("_label", "_input")
-                        if os.path.exists(tf):
-                            with open(tf, "r") as f:
-                                val = int(f.read().strip())
-                                if val > 0:
-                                    npu_temp = round(val / 1000.0, 1)
-                                    break
-                except Exception:
-                    pass
-
     # Fallback for CPU temperature from thermal zones if not found
     if cpu_temp is None:
         for tz in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
@@ -232,40 +203,7 @@ def get_temperatures():
             except Exception:
                 pass
 
-    # Fallback for NPU temperature from accel hwmon or thermal zones
-    if npu_temp is None:
-        for tp in sorted(glob.glob("/sys/class/accel/accel[0-9]/device/hwmon/hwmon*/temp*_input")):
-            try:
-                with open(tp, "r") as f:
-                    val = int(f.read().strip())
-                    if val > 0:
-                        npu_temp = round(val / 1000.0, 1)
-                        break
-            except Exception:
-                pass
-
-    if npu_temp is None:
-        for tz in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
-            type_path = os.path.join(tz, "type")
-            temp_path = os.path.join(tz, "temp")
-            if os.path.exists(type_path) and os.path.exists(temp_path):
-                try:
-                    with open(type_path, "r") as f:
-                        tz_type = f.read().strip().lower()
-                    if any(k in tz_type for k in ("npu", "xdna", "aie", "accel")):
-                        with open(temp_path, "r") as f:
-                            val = int(f.read().strip())
-                            if val > 0:
-                                npu_temp = round(val / 1000.0, 1)
-                                break
-                except Exception:
-                    pass
-
-    # On integrated APU (AMD Strix Halo / Ryzen AI Max+ 395), NPU shares package thermal dissipation
-    if npu_temp is None and cpu_temp is not None:
-        npu_temp = cpu_temp
-
-    return cpu_temp, gpu_temp, npu_temp
+    return cpu_temp, gpu_temp
 
 
 def get_npu_busy_percent():
@@ -383,7 +321,7 @@ def get_system_stats():
     except Exception:
         load_avg = [0.0, 0.0, 0.0]
 
-    cpu_temp, gpu_temp, npu_temp = get_temperatures()
+    cpu_temp, gpu_temp = get_temperatures()
     cpu_busy = get_cpu_busy_percent(load_avg)
     npu_busy = get_npu_busy_percent()
 
@@ -406,7 +344,6 @@ def get_system_stats():
         "npu": {
             "device": "AMD XDNA NPU (Ryzen AI Max+ 395)",
             "busy_percent": npu_busy,
-            "temp_c": npu_temp,
         },
         "cpu": {
             "busy_percent": cpu_busy,
@@ -416,7 +353,6 @@ def get_system_stats():
         "temperatures": {
             "cpu_c": cpu_temp,
             "gpu_c": gpu_temp,
-            "npu_c": npu_temp,
         },
         "load_avg": load_avg,
     }
