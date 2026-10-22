@@ -2,9 +2,10 @@
   config,
   lib,
   pkgs,
-  inputs ? {},
+  inputs ? { },
   ...
-}: let
+}:
+let
   mkGufo = import ./gufo/mkGufo.nix {
     inherit
       pkgs
@@ -13,7 +14,7 @@
       inputs
       ;
   };
-  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix {inherit pkgs lib config;};
+  mkLlamaCpp = import ./llama-cpp/mkLlamaCpp.nix { inherit pkgs lib config; };
   mkKyojin = import ./kyojin/mkKyojin.nix {
     inherit
       pkgs
@@ -22,7 +23,8 @@
       inputs
       ;
   };
-in {
+in
+{
   imports = [
     ./workload-manager.nix
     ./gufo
@@ -77,7 +79,7 @@ in {
           };
         }
       );
-      default = {};
+      default = { };
       description = "Global map of model_id -> { serviceName, remappedModel, url, systemdService, ... }";
     };
   };
@@ -88,21 +90,20 @@ in {
     };
 
     # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
-    systemd.services =
-      lib.mapAttrs' (
-        _: m: let
-          unitAttr = lib.removeSuffix ".service" m.serviceName;
-          otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
-        in
-          lib.nameValuePair unitAttr (
-            m.systemdService
-            // {
-              conflicts = (m.systemdService.conflicts or []) ++ otherUnits;
-              wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
-            }
-          )
+    systemd.services = lib.mapAttrs' (
+      _: m:
+      let
+        unitAttr = lib.removeSuffix ".service" m.serviceName;
+        otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
+      in
+      lib.nameValuePair unitAttr (
+        m.systemdService
+        // {
+          conflicts = (m.systemdService.conflicts or [ ]) ++ otherUnits;
+          wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
+        }
       )
-      config.services.models;
+    ) config.services.models;
 
     # Global models map definition
     services.models = {
@@ -114,7 +115,7 @@ in {
         mmprojPath = "qwen3.8-flash-next/mmproj-BF16.gguf";
         mtpModelPath = "qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf";
         context = 262144;
-        sessions = 1;
+        sessions = 2;
       };
 
       # 2. Qwen 3.8 27B with DFlash2 speculative decoding & vision
@@ -126,7 +127,7 @@ in {
         speculative = "dflash2";
         dflashModelPath = "qwen3.8-27b/Qwen3.8-27B-DFlash2-Q4_K_M.gguf";
         context = 32768;
-        sessions = 4;
+        sessions = 8;
       };
 
       # 3. Example Second Model: Qwen 2.5 72B Instruct
