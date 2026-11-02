@@ -255,6 +255,37 @@ in
         context = 131072; # Maximum native context length (128K tokens) verified on 128GB Strix Halo
         sessions = 1;
       };
+
+      "mimo-v2.6-flash-mopd" = mkLlamaCpp {
+        modelId = "mimo-v2.6-flash-mopd";
+        description = "MiMo V2.6 Flash MOPD mixed IQ2_XXS/XS + Q8 (309.8B) with vision, audio and video";
+        modelPath = "mimo-v2.6-flash-mopd"; # first shard; llama.cpp pulls the other three via split metadata
+        mmprojPath = "mimo-v2.6-flash-mopd/mmproj-MiMo-V2.6-Flash-MOPD-BF16.gguf";
+        context = 262144; # selected profile; native ceiling is 1048576 but OOMs on 128 GB
+        cacheTypeK = "q8_0";
+        cacheTypeV = "q8_0";
+        gpuLayers = 999;
+        parallel = 1;
+        flashAttention = true;
+        threads = 16; # 16 physical Zen 5 cores for decode
+        jinja = true; # native MiMo chat template: think blocks, tool calls, enable_thinking kwarg
+        extraArgs = [
+          "-b"
+          "2048"
+          "-ub"
+          "512"
+          "-tb"
+          "32" # 32 threads only for batch/prefill
+          "-fit"
+          "off" # keep the full 256K window, do not auto-shrink it
+          "-lm"
+          "none" # recipe ran with --no-mmap: no page-cache mappings on top of the shared LPDDR5x pool
+          "-rea"
+          "on"
+          "--chat-template-kwargs"
+          "{\"enable_thinking\":true}"
+        ];
+      };
     };
   };
 }
