@@ -261,11 +261,11 @@ in
         description = "MiMo V2.6 Flash MOPD mixed IQ2_XXS/XS + Q8 (309.8B) with vision, audio and video";
         modelPath = "mimo-v2.6-flash-mopd"; # first shard; llama.cpp pulls the other three via split metadata
         mmprojPath = "mimo-v2.6-flash-mopd/mmproj-MiMo-V2.6-Flash-MOPD-BF16.gguf";
-        context = 262144; # selected profile; native ceiling is 1048576 but OOMs on 128 GB
+        context = 1048576; # selected profile; native ceiling is 1048576 but OOMs on 128 GB
         cacheTypeK = "q8_0";
         cacheTypeV = "q8_0";
         gpuLayers = 999;
-        parallel = 1;
+        parallel = 2;
         flashAttention = true;
         threads = 16; # 16 physical Zen 5 cores for decode
         jinja = true; # native MiMo chat template: think blocks, tool calls, enable_thinking kwarg
