@@ -30,10 +30,16 @@ digraph EVO_X2 {
   wake_comfyui -> workload_lock [label="flock"];
   wake_comfyui -> comfyui_ml [label="nc :8189"];
 
+  // SGLang backend (:8084): started through the same switcher path as any LLM, no socket activation
+  switcher -> sglang [label="curl :8084"];
+
   // Mutual systemd conflicts across all workloads (Rule 1)
   active_llm -> immich_ml [label="conflicts", dir=both];
   active_llm -> comfyui_ml [label="conflicts", dir=both];
+  active_llm -> sglang [label="conflicts", dir=both];
   immich_ml -> comfyui_ml [label="conflicts", dir=both];
+  immich_ml -> sglang [label="conflicts", dir=both];
+  comfyui_ml -> sglang [label="conflicts", dir=both];
 }
 ```
 
@@ -63,10 +69,17 @@ Every model entry in `services.models` MUST adhere to the following attribute sc
   url,             # String: HTTP loopback URL (e.g. "http://127.0.0.1:8081")
   systemdService,  # AttrSet: standard NixOS systemd.services unit configuration
   description,     # (Optional) String: human-readable description for dashboard (default: "")
-  type,            # (Optional) String: engine identifier ("gufo" | "llama-cpp")
+  type,            # (Optional) String: engine identifier ("gufo" | "llama-cpp" | "kyojin" | "sglang")
   sessions,        # (Optional) Int: maximum concurrent sessions / slots (default: 1)
+  startTimeout,    # (Optional) Int: seconds the gateway waits for a cold backend (null = per-engine default)
 }
 ```
+
+Cold-start budgets are resolved at eval time in `modules/dash/default.nix` (`engineStartTimeouts`:
+llama.cpp/Gufo 180 s, Kyojin 300 s, SGLang 1800 s) and published in the registry as
+`models.<id>.start_timeout` plus `engine_start_timeouts`. `switcher.sh` and `dash.py` both read
+those numbers instead of carrying their own constants; the frontend allows a switch to run for
+20 minutes and shows elapsed time while it does.
 
 ### Helper Functions
 
@@ -114,6 +127,36 @@ Generates an ExLlamaV3/Kyojin inference service running native ROCm on gfx1151:
 ```
 
 ---
+
+#### `mkSGLang` (`modules/sglang/mkSGLang.nix`)
+Serves a Hugging Face model **directory** with SGLang, for engines that need features the GGUF
+runtimes lack (here: DFlash2 speculative decoding):
+```nix
+"ripple-65b-sglang" = mkSGLang {
+  modelId = "ripple-65b-sglang";
+  modelPath = "ripple-65b-nvfp4";          # directory under services.sglang.modelsDir
+  speculativeDraftPath = "ripple-65b-dflash2";
+  numDraftTokens = 16;                     # drafter's native block size
+  context = 262144;
+  maxTotalTokens = 278528;
+  memFractionStatic = 0.85;                # rest stays free for OS + Triton JIT arena
+  attentionBackend = "triton";             # aiter kernels are CDNA-only on gfx1151
+};
+```
+The base module (`modules/sglang/default.nix`) provides `services.sglang.{package,fhsEnvironment,interpreter,pythonPath}`,
+the `sglang` user, and port **8084** by default. Because nixpkgs has no sglang and PyPI ships only
+CUDA-side wheels, the stack is assembled from upstream's own Strix Halo recipe
+(`docker/rocm-gfx1151.Dockerfile`):
+- `packages/source.nix` unpacks the pinned wheel (it carries CPython extension modules, so the
+  interpreter ABI must match `pyTag`; nixpkgs defaults to 3.14 where no wheel exists, hence
+  `python313`). stdenv has no `.whl` unpack rule, so `dontUnpack` + explicit `unzip`.
+- `packages/deps.nix` lists the dependencies as a Nix call graph. It overrides **torch itself**
+  inside `python3.pkgs.overrideScope`: dependents (compressed-tensors, xgrammar, timm, …) each
+  propagate plain CPU torch, and two torches in one environment collide on
+  `bin/.torchfrtrace-wrapped` and abort `pkgs.buildEnv`.
+- Neither `rocmPackages.gfx1151` nor pip is used at build time: the scoped ROCm set routes MIOpen
+  through `composable_kernel-gfx1151`, which is marked broken in this nixpkgs revision.
+- Runtime posture: `SGLANG_USE_AITER=0`, `--attention-backend triton`, no `HSA_OVERRIDE_GFX_VERSION`.
 
 ## 3. Workload Orchestration & Lock Protocol (`modules/workload-manager.nix`)
 
@@ -204,6 +247,12 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     │   └── mkLlamaCpp.nix      # mkLlamaCpp helper implementing strict model contract
     ├── on-demand/
     │   └── mkWakeScript.nix    # Generic netcat wake-on-request script generator
+    ├── sglang/
+    │   ├── default.nix         # SGLang base: engine+FHS env, sglang user, gfx1151 posture
+    │   ├── mkSGLang.nix        # mkSGLang helper implementing strict model contract
+    │   └── packages/
+    │       ├── source.nix      # pinned sglang wheel -> site-packages tree (no pip)
+    │       └── deps.nix        # dependency call graph with one ROCm-enabled torch
     ├── minimal.nix             # Kernel sysctl, 16GB swapfile, hf-download, tools
     ├── models.nix              # Central models registry & workload coordinator
     ├── network.nix             # Static IP, DNS nameservers & gateway networking

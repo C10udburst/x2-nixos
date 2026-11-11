@@ -23,6 +23,7 @@ let
       inputs
       ;
   };
+  mkSGLang = import ./sglang/mkSGLang.nix { inherit pkgs lib config; };
 in
 {
   imports = [
@@ -30,6 +31,7 @@ in
     ./gufo
     ./llama-cpp
     ./kyojin
+    ./sglang
     ./immich
     ./comfyui
   ];
@@ -72,6 +74,11 @@ in
               default = 1;
               description = "Maximum concurrent sessions / slots.";
             };
+            startTimeout = lib.mkOption {
+              type = with lib.types; nullOr int;
+              default = null;
+              description = "Seconds the gateway waits for a cold backend to become responsive. Null = gateway default.";
+            };
             systemdService = lib.mkOption {
               type = lib.types.attrs;
               description = "NixOS systemd.services unit configuration.";
@@ -86,7 +93,7 @@ in
 
   config = {
     _module.args = {
-      inherit mkGufo mkLlamaCpp mkKyojin;
+      inherit mkGufo mkLlamaCpp mkKyojin mkSGLang;
     };
 
     # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
@@ -322,7 +329,7 @@ in
         package = pkgs.callPackage ./llama-cpp/packages/ricursive.nix {
           rocmPackages = pkgs.rocmPackages.gfx1151;
         };
-        context = 262144; # native ceiling is 2097152; 256K keeps the KV cache under ~9 GiB
+        context = 524288; # native ceiling is 2097152; 256K keeps the KV cache under ~9 GiB
         cacheTypeK = "q8_0";
         cacheTypeV = "q8_0";
         gpuLayers = 99; # all 80 layers on the RDNA 3.5 iGPU
@@ -338,6 +345,67 @@ in
           "-fit"
           "off"
         ];
+      };
+
+      # 14. Ripple-65B on SGLang (NVFP4 + DFlash2 speculative decoding)
+      #
+      #     Same weights as "ripple-65b", different engine, and it is the only way to get
+      #     the drafter running: ricursiveAI/Ripple-65B-Preview-DFlash2 needs the target's
+      #     intermediate hidden states (taps at layers 1/20/39/58/77), a NoPE draft layer
+      #     and 4-tap dynamic convolutions, none of which llama.cpp implements. For a dense
+      #     65B whose decode is bound by the 256 GB/s LPDDR5x bus, that speculation is the
+      #     whole game: ~4 tok/s becomes usable.
+      #
+      #     Why NVFP4 rather than the GGUF quants: Ricursive ships an NVFP4 checkpoint whose
+      #     MLPs are 4-bit with BF16 attention/embeddings/lm_head (~67.2 GiB), which is what
+      #     SGLang's Ripple path is built around. On this APU W4A16 through Triton is also
+      #     *faster* per token than the equivalent BF16 arithmetic, not just smaller.
+      #
+      #     Memory budget (128 GB unified, exclusive workload per Rule 1). Measured from the
+      #     repositories, not estimated:
+      #       target NVFP4 checkpoint   57.22 GB (53.29 GiB, 6 shards)
+      #       DFlash2 drafter            8.08 GB  (7.52 GiB, BF16 single file)
+      #       => ~61 GiB of weights before any cache exists.
+      #     --mem-fraction-static 0.85 reserves ~109 GiB of the 128 GB and leaves ~19 GiB for
+      #     the kernel, the Triton JIT arena and page cache. What remains after weights is the
+      #     KV pool (~48 GiB), which is generous because only 16 of the 80 layers are
+      #     global-attention; the other 64 carry a 1024-token sliding window, so BF16 KV costs
+      #     ~66 KB/token and 262144 tokens needs ~17 GiB. There is therefore room for the
+      #     drafter's own 16K-window cache without touching the target pool.
+      #     If a cuda-graph capture ever fails OOM, lower numDraftTokens or
+      #     memFractionStatic - the failure shows up at capture time, not at weight load.
+      #
+      #     Strix Halo specifics (all inherited from upstream's docker/rocm-gfx1151.Dockerfile):
+      #       * --attention-backend triton: aiter's compiled attention/RMSNorm kernels are
+      #         CDNA-only (v_pk_mul_f32, wave64 templates), and mkSGLang exports
+      #         SGLANG_USE_AITER=0 so the import-time path stays on Triton too;
+      #       * --max-running-requests 1 and one captured decode batch size: a single user
+      #         owns the bus anyway, and every extra captured graph eats the KV pool;
+      #       * --cuda-graph-bs-decode [1] matches the vendor's local Spark recipe.
+      #
+      #     Known gap, stated plainly: sglang support for `RicursiveForCausalLM` is still
+      #     open upstream (sgl-project/sglang#48636, opened 2026-11-05); v0.5.23 loads the
+      #     checkpoint through its out-of-tree code, which is why trustRemoteCode is set and
+      #     why --reasoning-parser/--tool-call-parser are left unset until that lands.
+      "ripple-65b-sglang" = mkSGLang {
+        modelId = "ripple-65b-sglang";
+        description = "Ripple-65B Preview NVFP4 + DFlash2 speculative decoding (SGLang, triton backend)";
+        modelPath = "ripple-65b-nvfp4";
+        speculativeDraftPath = "ripple-65b-dflash2";
+        numDraftTokens = 16; # the drafter's native block size
+        draftWindowSize = 16384;
+        context = 262144;
+        maxTotalTokens = 278528; # context + one draft window of slack
+        memFractionStatic = 0.85;
+        maxRunningRequests = 1;
+        cudaGraphDecodeBatchSize = [ 1 ];
+        kvCacheDtype = "bfloat16";
+        attentionBackend = "triton";
+        sessions = 1;
+        # v0.5.23 has no built-in `RicursiveForCausalLM` (upstream PR #48636 is still open),
+        # so the checkpoint's own modeling_ricursive.py must be loaded. Drop this once the
+        # engine pins a release that carries the architecture.
+        extraArgs = [ "--trust-remote-code" ];
       };
     };
   };

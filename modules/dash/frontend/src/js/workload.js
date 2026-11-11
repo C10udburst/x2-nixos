@@ -22,7 +22,16 @@ export function renderWorkload() {
   if (state.switching) {
     setText(els.title, state.pending ? `Loading ${state.pending}…` : "Switching workload…");
     setExclusiveClass(els.title, "text-warning", TITLE_COLORS);
-    setText(els.desc, "Stopping other workloads and loading the target into unified memory.");
+    // A cold SGLang start legitimately takes minutes; say so with a live counter rather
+    // than leaving the impression that the dashboard hung.
+    const elapsed = state.switchedAt ? Math.max(0, Math.round((Date.now() - state.switchedAt) / 1000)) : 0;
+    const mm = Math.floor(elapsed / 60);
+    const ss = String(elapsed % 60).padStart(2, "0");
+    setText(
+      els.desc,
+      `Stopping other workloads and loading the target into unified memory • ${mm}:${ss} elapsed` +
+        (elapsed > 90 ? " (large engines JIT-compile kernels on first start)" : ""),
+    );
     els.unload.disabled = true;
     return;
   }

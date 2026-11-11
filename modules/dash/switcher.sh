@@ -63,6 +63,9 @@ fi
 TARGET_SERVICE=$(echo "$MODEL_ENTRY" | jq -r '.service_name')
 REMAPPED_MODEL=$(echo "$MODEL_ENTRY" | jq -r '.remapped_model // empty')
 TARGET_URL=$(echo "$MODEL_ENTRY" | jq -r '.url')
+# Cold-start budget from the registry (eval-time, per backend type). SGLang imports torch
+# and JIT-compiles Triton kernels, so a fixed 180s would time out on its first start.
+START_TIMEOUT=$(echo "$MODEL_ENTRY" | jq -r '.start_timeout // 180')
 
 ACTIVE_MODEL=""
 if [ -f "$STATE_FILE" ]; then
@@ -97,9 +100,11 @@ if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
 
     # Start target service (systemd Conflicts automatically stops other models)
     if sudo -n "${SYSTEMCTL:-systemctl}" start "$TARGET_SERVICE" 2>/dev/null; then
-      DEADLINE=$(( $(date +%s) + 180 ))
+      DEADLINE=$(( $(date +%s) + START_TIMEOUT ))
       READY=0
       while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+        # /health is a plain liveness probe everywhere; /ready is SGLang's own gate that
+        # stays 503 until the engine finished loading weights and capturing cuda graphs.
         if curl -s -f "${TARGET_URL}/health" >/dev/null 2>&1 || \
            curl -s -f "${TARGET_URL}/v1/models" >/dev/null 2>&1 || \
            curl -s -f "${TARGET_URL}/" >/dev/null 2>&1; then

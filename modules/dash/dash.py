@@ -31,6 +31,15 @@ if os.path.exists(CONFIG_PATH):
 
 MODELS = CONFIG.get("models", {})
 SERVICES = CONFIG.get("services", [])
+ENGINE_START_TIMEOUTS = CONFIG.get("engine_start_timeouts", {})
+
+
+def start_timeout_for(mcfg):
+    """Cold-start budget for a model, from the eval-time registry."""
+    budget = mcfg.get("start_timeout")
+    if isinstance(budget, int) and budget > 0:
+        return budget
+    return ENGINE_START_TIMEOUTS.get(mcfg.get("type"), 180)
 ALL_EXCLUSIVE_UNITS = CONFIG.get("all_exclusive_units", [])
 SYSTEMCTL = os.environ.get("SYSTEMCTL", "systemctl")
 LOCK_FILE = CONFIG.get("lock_file", "/run/model-lock/model.lock")
@@ -442,7 +451,8 @@ def check_url_health(url_str, timeout=1.0):
     parsed = urlparse(url_str)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 80
-    paths = ["/health", "/v1/models", "/"]
+    # /ready is SGLang's own readiness gate; the other two cover llama.cpp, Gufo and Kyojin.
+    paths = ["/health", "/ready", "/v1/models", "/"]
     for p in paths:
         try:
             conn = http.client.HTTPConnection(host, port, timeout=timeout)
@@ -546,7 +556,7 @@ def handle_switch(body):
             sys.stdout.buffer.flush()
             return
 
-        deadline = time.time() + 180
+        deadline = time.time() + start_timeout_for(mcfg)
         ready = False
         while time.time() < deadline:
             if check_url_health(target_url):

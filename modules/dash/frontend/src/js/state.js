@@ -9,6 +9,9 @@ export const state = {
   services: [],
   switching: false,
   pending: null,
+  // Epoch ms when the current switch began, so the workload card can show how long a
+  // cold load (SGLang: minutes) has been running instead of looking frozen.
+  switchedAt: 0,
 };
 
 export function findModel(name) {

@@ -54,6 +54,7 @@ async function handleSwitch(name) {
   if (state.switching) return;
   state.switching = true;
   state.pending = name;
+  state.switchedAt = Date.now();
   clearPlaygroundTargetPick(); // an explicit switch owns the playground target again
   renderWorkload();
   renderModels();

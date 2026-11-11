@@ -51,11 +51,37 @@
         description = m.description;
         type = m.type;
         sessions = m.sessions;
+        # Cold-start budget the gateway waits for a freshly started backend. Null means
+        # "engine default": GGUF engines answer in seconds, SGLang imports torch, maps
+        # safetensors through the ROCm runtime and may JIT Triton kernels -> minutes.
+        start_timeout = m.startTimeout;
       })
       config.services.models;
   };
 
-  modelsJsonFile = pkgs.writeText "models-registry.json" (builtins.toJSON modelsConfig);
+  # Cold-start budget per backend type, shared by the FastCGI switcher and the Python
+  # API so neither can drift from the other. GGUF engines answer in seconds; SGLang
+  # imports torch, maps safetensors through the ROCm runtime and JIT-compiles Triton.
+  engineStartTimeouts = {
+    llama-cpp = 180;
+    gufo = 180;
+    kyojin = 300;
+    sglang = 1800;
+  };
+
+  modelsConfigFinal = modelsConfig // {
+    # Per-model override wins, otherwise the engine default. The switcher reads this off
+    # the model entry it already looked up; dash.py reads the same numbers.
+    # The registry is also read by the local test harness, which builds model entries by
+    # hand, so resolve the budget without assuming every entry came from the contract.
+    models = lib.mapAttrs (_n: m: m // {
+      start_timeout =
+        m.startTimeout or engineStartTimeouts.${m.type} or 180;
+    }) modelsConfig.models;
+    engine_start_timeouts = engineStartTimeouts;
+  };
+
+  modelsJsonFile = pkgs.writeText "models-registry.json" (builtins.toJSON modelsConfigFinal);
 
   # Static frontend (Tailwind 4 + daisyUI 5 + Lightweight Charts), built at build time
   dashboardFrontend = import ./frontend.nix {inherit pkgs lib;};
@@ -118,6 +144,13 @@ in {
       type = lib.types.bool;
       default = true;
       description = "Enable the FastCGI model switcher gateway and web dashboard.";
+    };
+
+    modelsRegistry = lib.mkOption {
+      type = lib.types.package;
+      default = modelsJsonFile;
+      visible = false;
+      description = "Eval-time model/workload registry consumed by switcher.sh, dash.py and the local test harness.";
     };
 
     port = lib.mkOption {
