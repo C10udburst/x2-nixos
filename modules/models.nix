@@ -189,7 +189,7 @@ in
         modelPath = "qwen3.8-flash-next/UD-Q4_K_XL";
         mmprojPath = "qwen3.8-flash-next/mmproj-BF16.gguf";
         mtpModelPath = "qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf";
-        context = 524288;
+        context = 262144;
         sessions = 2;
       };
 
