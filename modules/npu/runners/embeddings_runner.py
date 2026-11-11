@@ -44,11 +44,11 @@ class EmbeddingsRunner:
 
         tokenizer_path = os.path.join(model_dir, "tokenizer.json")
         if not os.path.exists(tokenizer_path):
-            # AMD ships compiled artifacts only; dl-npu.sh pulls the tokenizer files of
-            # the source model next to them.
+            # AMD publishes compiled artifacts only, so the tokenizer sidecar has to be
+            # placed next to them when the weights are installed.
             raise ApiError(
-                f"{tokenizer_path} is missing - run /srv/models/dl-npu.sh to fetch the "
-                "tokenizer files of the source model",
+                f"{tokenizer_path} is missing - the compiled artifact ships without "
+                "tokenizer files; place tokenizer.json next to model.onnx",
                 500,
                 "server_error",
             )

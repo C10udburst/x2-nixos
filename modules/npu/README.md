@@ -22,8 +22,10 @@ packages/strip-execstack.py  clears PT_GNU_STACK X (kernel >= 6.6 rejects it on 
 runners/npu_http.py      minimal /health + modality routes, SSE streaming, one session/lock
 runners/genai_runner.py  onnxruntime-genai model -> /v1/chat/completions, /v1/completions
 runners/embeddings_runner.py  ONNX + VitisAI EP -> /v1/embeddings
-dl-npu.sh                weights downloader (the only script here: weights are host state)
 ```
+
+Model weights are host state under `services.npu.modelsDir` (`/srv/models/<registry id>`) and
+are installed by the operator - nothing in this module downloads anything.
 
 ## The runtime is a package, not a script install
 
@@ -66,8 +68,8 @@ gateway switcher (`modules/dash/switcher.sh`) owns routing, remapping and the ca
 
 `kind` selects the runner (`genai` | `embeddings` | `asr` | `image-gen`) and the advertised
 capabilities; `modelPath` is resolved against `services.npu.modelsDir` and checked in
-`ExecStartPre`, so a missing download fails with a pointer to `dl-npu.sh` instead of a
-half-open connection.
+`ExecStartPre`, so weights that are not in place fail in the journal with the missing path
+instead of leaving the gateway on a half-open connection.
 
 ## Status: the stack is validated, the two MVP artifacts are not shippable yet
 
@@ -92,7 +94,7 @@ Two AMD-side blockers, each isolated so the other still works:
    `io_uring` (used by the 1.9.0 BO path) is enabled here, and the failure reproduces with
    `load_as_static`, graph batching, and the tokenizer stripped out, so it is not a usage
    error. XRT ships the out-of-tree driver source (`services.npu` exposes it as
-   `ryzenAi.amdxdnaSource`); installing it via DKMS is the fix and is tracked in PLAN.md.
+   `ryzenAi.amdxdnaSource`); installing it via DKMS is the fix (AGENTS.md section 7).
 2. **Embeddings path (`embeddings_runner.py`) — AMD artifact cannot be loaded by any runtime.**
    `amd/embeddinggemma-300m_npu_rai_1.8.0_npu_4K` references `com.ryzenai:CastAvx`, which no
    1.8.0/1.9.0 runtime registers (same class as open

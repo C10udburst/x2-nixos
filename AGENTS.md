@@ -118,8 +118,9 @@ engine shape as `mkGufo`, selected by `kind` (`genai` | `embeddings` | `asr` | `
 };
 ```
 `modelPath` defaults to `modelId` and resolves against `services.npu.modelsDir`; the resulting
-`modelDir` is checked in `ExecStartPre` so a missing download fails with a pointer to
-`modules/npu/dl-npu.sh` instead of hanging the gateway.
+`modelDir` is checked in `ExecStartPre` so weights that are not installed fail in the journal
+with the missing path instead of hanging the gateway. Weights are host state - no unit or
+module in this repo downloads anything.
 
 #### `mkKyojin` (`modules/kyojin/mkKyojin.nix`)
 Generates an ExLlamaV3/Kyojin inference service running native ROCm on gfx1151:
@@ -275,11 +276,10 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     │   ├── packages/
     │   │   ├── ryzen-ai.nix    # AMD Ryzen AI 1.9.0 runtime as derivations (hash-pinned)
     │   │   └── strip-execstack.py  # clears PT_GNU_STACK X (kernel >= 6.6 rejects on dlopen)
-    │   ├── runners/
-    │   │   ├── npu_http.py     # shared /health + SSE streaming + one-session lock
-    │   │   ├── genai_runner.py # onnxruntime-genai -> /v1/chat/completions, /v1/completions
-    │   │   └── embeddings_runner.py # ONNX + VitisAI EP -> /v1/embeddings
-    │   └── dl-npu.sh           # NPU weights downloader (weights stay host state)
+    │   └── runners/
+    │       ├── npu_http.py     # shared /health + SSE streaming + one-session lock
+    │       ├── genai_runner.py # onnxruntime-genai -> /v1/chat/completions, /v1/completions
+    │       └── embeddings_runner.py # ONNX + VitisAI EP -> /v1/embeddings
     ├── minimal.nix             # Kernel sysctl, 16GB swapfile, hf-download, tools
     ├── models.nix              # Central models registry & workload coordinator
     ├── network.nix             # Static IP, DNS nameservers & gateway networking

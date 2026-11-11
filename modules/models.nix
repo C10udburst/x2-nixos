@@ -33,8 +33,8 @@ let
 
   npuModels = {
     # 14. Llama 3.2 1B Instruct on the XDNA 2 NPU (OGA / genai runtime, int4)
-    #     Artifact: amd/Llama-3.2-1B-Instruct_rai_1.9.0_npu (ungated, 2.0 GB), fetched by
-    #     /srv/models/dl-npu.sh into /srv/models/llama-3.2-1b-npu.
+    #     Artifact: amd/Llama-3.2-1B-Instruct_rai_1.9.0_npu (ungated, 2.0 GB), installed by
+    #     hand into /srv/models/llama-3.2-1b-npu. Weights are host state: no unit downloads.
     "llama-3.2-1b-npu" = mkNpuModel {
       modelId = "llama-3.2-1b-npu";
       remappedModel = "Llama-3.2-1B-Instruct_rai_1.9.0_npu";

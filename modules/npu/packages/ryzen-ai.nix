@@ -138,7 +138,8 @@ let
   '';
 
   # Out-of-tree amdxdna driver source shipped by XRT, unpacked for a DKMS build. Needed when
-  # the in-tree driver lags the runtime userspace (see PLAN.md: BO creation fails on 7.2.9).
+  # the in-tree driver lags the runtime userspace (BO creation fails on kernel 7.2.9, see
+  # AGENTS.md section 7).
   amdxdnaSource = runCommand "amdxdna-driver-src" { } ''
     mkdir -p "$out"
     tar -xf ${xrt}/opt/xilinx/xrt/share/amdxdna/amdxdna.tar.gz -C "$out" --strip-components=1

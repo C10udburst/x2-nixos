@@ -86,9 +86,10 @@ in
       DeviceAllow = [ npuCfg.device ];
 
       ExecStartPre = [
-        # Fail fast with a readable journal line when the weights were never fetched,
-        # then claim the NPU state file (never active_gpu - the domains are independent).
-        "/bin/sh -c 'test -d ${lib.escapeShellArg modelDir} || { echo \"model directory ${modelDir} is missing - run ${modelsDir}/dl-npu.sh\" >&2; exit 1; }'"
+        # Fail fast with a readable journal line when the weights are not in place (units
+        # never fetch anything - weights are placed on the host by the operator), then claim
+        # the NPU state file (never active_gpu - the domains are independent).
+        "/bin/sh -c 'test -d ${lib.escapeShellArg modelDir} || { echo \"model directory ${modelDir} is missing\" >&2; exit 1; }'"
         "/bin/sh -c '${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_npu && (${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_npu 2>/dev/null || true)'"
       ];
 
