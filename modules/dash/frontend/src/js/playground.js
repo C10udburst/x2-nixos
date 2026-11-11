@@ -9,7 +9,7 @@
 
 import { streamChat } from "./api.js";
 import { escapeHtml, setExclusiveClass, setText } from "./dom.js";
-import { inferenceTarget, state } from "./state.js";
+import { inferenceTarget, modelsOfDevice, state } from "./state.js";
 
 const IDLE_OUTPUT = "Output will stream here…";
 const MAX_TOKENS = 1024;
@@ -49,6 +49,7 @@ let agents = []; // the agents of the current display (rebuilt on count change /
 let generating = false;
 let pinnedTarget = null; // manual dropdown pick, survives status polling
 let targetSignature = "";
+let domain = "gpu"; // playground domain filter: chat on the GPU LLM or on the NPU LLM
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -447,8 +448,8 @@ function setGenerating(active) {
 /* ---------------------------------------------------------------- target select */
 
 function renderTargetOptions() {
-  const names = (state.models ?? []).map((model) => model.name);
-  const signature = `${names.join("|")}@${state.active ?? ""}`;
+  const names = modelsOfDevice(domain).map((model) => model.name);
+  const signature = `${domain}@${names.join("|")}@${state.active.gpu ?? ""}@${state.active.npu ?? ""}`;
   if (signature === targetSignature) return;
   targetSignature = signature;
 
@@ -458,7 +459,7 @@ function renderTargetOptions() {
         .map(
           (name) =>
             `<option value="${escapeHtml(name)}">${escapeHtml(name)}${
-              name === state.active ? " • loaded" : ""
+              name === state.active[domain] ? " • loaded" : ""
             }</option>`,
         )
         .join("")
@@ -467,7 +468,7 @@ function renderTargetOptions() {
   if (names.includes(previous)) els.target.value = previous;
 }
 
-export function setPlaygroundTarget(target = inferenceTarget()) {
+export function setPlaygroundTarget(target = inferenceTarget(domain)) {
   if (!els) return;
   renderTargetOptions();
   if (generating) return; // never fight the user (or a live run) mid-stream
@@ -489,6 +490,7 @@ export function clearPlaygroundTargetPick() {
 export function initPlayground() {
   els = {
     target: document.getElementById("playground-target"),
+    domain: document.getElementById("playground-domain"),
     count: document.getElementById("agent-count"),
     prompt: document.getElementById("prompt-input"),
     send: document.getElementById("btn-send"),
@@ -508,6 +510,26 @@ export function initPlayground() {
   els.count.min = "1";
   els.count.max = String(MAX_AGENTS);
   els.count.value = "1";
+
+  if (els.domain) {
+    els.domain.innerHTML = [
+      { id: "gpu", label: "GPU" },
+      { id: "npu", label: "NPU" },
+    ]
+      .map((entry) => `<option value="${entry.id}">${entry.label}</option>`)
+      .join("");
+    els.domain.value = domain;
+    els.domain.addEventListener("change", () => {
+      if (generating) {
+        els.domain.value = domain; // never retarget mid-stream
+        return;
+      }
+      domain = els.domain.value === "npu" ? "npu" : "gpu";
+      pinnedTarget = null;
+      targetSignature = "";
+      setPlaygroundTarget();
+    });
+  }
 
   els.send.addEventListener("click", () => (generating ? stop() : send()));
   els.clear.addEventListener("click", clear);

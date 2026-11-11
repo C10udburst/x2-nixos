@@ -23,6 +23,40 @@ let
       inputs
       ;
   };
+  mkNpuModel = import ./npu/mkNpuModel.nix { inherit pkgs lib config; };
+
+  # Rule 1 is enforced per hardware domain, so the NPU entries below coexist with a warm
+  # GPU model. They are only added to the registry when the Ryzen AI runtime is enabled:
+  # `services.npu.enable = false` must leave a GPU-only registry that still evaluates and
+  # builds (no /dev/accel rules, no NPU units).
+  npuEnabled = config.services.npu or { enable = false; };
+
+  npuModels = {
+    # 14. Llama 3.2 1B Instruct on the XDNA 2 NPU (OGA / genai runtime, int4)
+    #     Artifact: amd/Llama-3.2-1B-Instruct_rai_1.9.0_npu (ungated, 2.0 GB), fetched by
+    #     /srv/models/dl-npu.sh into /srv/models/llama-3.2-1b-npu.
+    "llama-3.2-1b-npu" = mkNpuModel {
+      modelId = "llama-3.2-1b-npu";
+      remappedModel = "Llama-3.2-1B-Instruct_rai_1.9.0_npu";
+      description = "Llama 3.2 1B Instruct int4 on the Ryzen AI NPU - light chat alongside the GPU LLM";
+      port = 8083;
+      kind = "genai";
+    };
+
+    # 15. EmbeddingGemma 300M on the NPU - NOT REGISTERED: the only artifact AMD publishes
+    #     (amd/embeddinggemma-300m_npu_rai_1.8.0_npu_4K) references a custom op that no
+    #     Ryzen AI 1.8/1.9 runtime registers, so the session cannot even be created:
+    #     "com.ryzenai:CastAvx(-1) is not a registered function/op"
+    #     (https://github.com/amd/RyzenAI-SW/issues/387, verified on this host).
+    #     The runner is ready - re-enable this entry when AMD ships a fixed artifact.
+    #
+    # "embeddinggemma-300m" = mkNpuModel {
+    #   modelId = "embeddinggemma-300m";
+    #   description = "EmbeddingGemma 300M (ONNX int4, Ryzen AI NPU) - text embeddings";
+    #   port = 8084;
+    #   kind = "embeddings";
+    # };
+  };
 in
 {
   imports = [
@@ -30,6 +64,7 @@ in
     ./gufo
     ./llama-cpp
     ./kyojin
+    ./npu
     ./immich
     ./comfyui
   ];
@@ -38,16 +73,26 @@ in
     defaultModel = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = "qwen3.8-flash-next";
-      description = "Default model to activate on boot. If null, boots with 0 VRAM used.";
+      description = ''
+        Default model to activate on boot, matched against the registry key.
+        If null, boots with 0 VRAM used. Under dual-domain locking at most one
+        default per domain makes sense - enabling one GPU and one NPU model at
+        once is legitimate and they run concurrently.
+      '';
     };
 
     models = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.submodule {
           options = {
+            device = lib.mkOption {
+              type = lib.types.enum [ "gpu" "npu" ];
+              default = "gpu";
+              description = "Hardware acceleration domain: 'gpu' (RDNA 3.5) or 'npu' (Ryzen AI XDNA 2).";
+            };
             serviceName = lib.mkOption {
               type = lib.types.str;
-              description = "Systemd service unit name (e.g. gufo-foo.service).";
+              description = "Systemd service unit name (e.g. gufo-foo.service or npu-bge-m3.service).";
             };
             remappedModel = lib.mkOption {
               type = lib.types.str;
@@ -72,6 +117,20 @@ in
               default = 1;
               description = "Maximum concurrent sessions / slots.";
             };
+            # Free-form on purpose: the switcher never reads it, so adding a modality
+            # (asr, image-gen, rerank, ...) must not require touching this file.
+            capabilities = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = "OpenAI-ish capability tags for UI/model discovery, e.g. [ \"embeddings\" ].";
+            };
+            # Empty means "no on-disk prerequisite known" - the switcher only pre-flights
+            # a directory it was actually told about (NPU entries set this).
+            modelDir = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              description = "Absolute model directory on the host, or \"\" when not applicable.";
+            };
             systemdService = lib.mkOption {
               type = lib.types.attrs;
               description = "NixOS systemd.services unit configuration.";
@@ -86,27 +145,35 @@ in
 
   config = {
     _module.args = {
-      inherit mkGufo mkLlamaCpp mkKyojin;
+      inherit mkGufo mkLlamaCpp mkKyojin mkNpuModel;
     };
 
-    # Instantiate model systemd services with mutual Conflicts (Rule 1: single heavy workload in VRAM)
+    # Instantiate model systemd services with mutual Conflicts.
+    # Rule 1 is per domain: a model conflicts with the workloads of ITS OWN domain only,
+    # so an NPU model never unloads a GPU LLM and vice versa.
     systemd.services = lib.mapAttrs' (
-      _: m:
+      modelId: m:
       let
         unitAttr = lib.removeSuffix ".service" m.serviceName;
-        otherUnits = lib.filter (u: u != m.serviceName) config.services.workload-manager.allExclusiveUnits;
+        domainUnits =
+          if m.device == "npu" then
+            config.services.workload-manager.npuExclusiveUnits
+          else
+            config.services.workload-manager.gpuExclusiveUnits;
+        otherUnits = lib.filter (u: u != m.serviceName) domainUnits;
       in
       lib.nameValuePair unitAttr (
         m.systemdService
         // {
           conflicts = (m.systemdService.conflicts or [ ]) ++ otherUnits;
-          wantedBy = lib.optional (config.services.defaultModel == m.remappedModel) "multi-user.target";
+          wantedBy = lib.optional (config.services.defaultModel == modelId) "multi-user.target";
         }
       )
     ) config.services.models;
 
     # Global models map definition
     services.models = {
+      # NOTE: NPU (XDNA 2) models are appended below the GPU block via npuModels.
       # 1. Primary Model: Qwen 3.8 Flash Next with MTP speculative decoding & vision
       "qwen3.8-flash-next" = mkGufo {
         modelId = "qwen3.8-flash-next";
@@ -339,6 +406,6 @@ in
           "off"
         ];
       };
-    };
+    } // lib.optionalAttrs npuEnabled.enable npuModels;
   };
 }

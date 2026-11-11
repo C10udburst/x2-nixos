@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>EVO-X2 • AI Inference Dashboard</title>
   <meta name="description"
-    content="GMKtec EVO-X2 (Ryzen AI Max+ 395) single-workload AI inference gateway dashboard." />
+    content="GMKtec EVO-X2 (Ryzen AI Max+ 395) dual-domain (GPU + NPU) AI inference gateway dashboard." />
   <link rel="icon"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
   <!-- @app-stylesheet -->
@@ -22,7 +22,7 @@
           GMKtec EVO-X2
           <span class="badge badge-neutral font-mono text-xs">Ryzen AI Max+ 395</span>
         </h1>
-        <p class="text-xs opacity-60">128GB unified LPDDR5X • RDNA 3.5 APU • NixOS</p>
+        <p class="text-xs opacity-60">128GB unified LPDDR5X • RDNA 3.5 iGPU + XDNA 2 NPU • NixOS</p>
       </div>
       <div class="navbar-end gap-3">
         <a href="/reserve.html" class="btn btn-outline btn-sm font-mono gap-1.5" title="LLM Workload Reservations">
@@ -69,22 +69,48 @@
       </article>
     </section>
 
-    <!-- Active workload (Rule 1: exactly one heavy workload in unified memory) -->
-    <section class="card bg-base-200 shadow">
-      <div class="card-body">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-          <div class="flex flex-col gap-1">
-            <h2 class="card-title text-sm opacity-60">Active workload • single workload in memory</h2>
-            <p id="workload-title" class="font-mono text-xl font-bold text-primary">None (0 GB allocated)</p>
-            <p id="workload-desc" class="text-sm opacity-60">
-              Idle. Ready to launch a model or an on-demand service on the first request.
-            </p>
-          </div>
-          <div class="card-actions">
-            <button id="btn-unload" class="btn btn-error btn-sm" type="button" disabled>Unload workload</button>
+    <!-- Active workloads: Rule 1 per domain - at most one GPU workload AND at most one
+         NPU workload, running concurrently and unloaded independently -->
+    <section class="grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Active workloads">
+      <article class="card bg-base-200 shadow">
+        <div class="card-body">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div class="flex flex-col gap-1">
+              <h2 class="card-title flex items-center gap-2 text-sm opacity-60">
+                <span class="badge badge-primary badge-sm font-mono">GPU</span>
+                RDNA 3.5 • unified memory pool
+              </h2>
+              <p id="workload-gpu-title" class="font-mono text-xl font-bold text-primary">None (0 GB allocated)</p>
+              <p id="workload-gpu-desc" class="text-sm opacity-60">
+                Idle. Ready to launch a model or an on-demand service on the first request.
+              </p>
+            </div>
+            <div class="card-actions">
+              <button id="btn-unload-gpu" class="btn btn-error btn-sm" type="button" disabled>Unload GPU</button>
+            </div>
           </div>
         </div>
-      </div>
+      </article>
+
+      <article class="card bg-base-200 shadow">
+        <div class="card-body">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div class="flex flex-col gap-1">
+              <h2 class="card-title flex items-center gap-2 text-sm opacity-60">
+                <span class="badge badge-secondary badge-sm font-mono">NPU</span>
+                Ryzen AI XDNA 2
+              </h2>
+              <p id="workload-npu-title" class="font-mono text-xl font-bold text-primary">None (NPU idle)</p>
+              <p id="workload-npu-desc" class="text-sm opacity-60">
+                Idle. NPU models start on the first request and run alongside the GPU workload.
+              </p>
+            </div>
+            <div class="card-actions">
+              <button id="btn-unload-npu" class="btn btn-error btn-sm" type="button" disabled>Unload NPU</button>
+            </div>
+          </div>
+        </div>
+      </article>
     </section>
 
     <section class="flex flex-col gap-3">
@@ -106,6 +132,11 @@
               workload hot-swaps on the request itself, never on selection.</p>
           </div>
           <div class="flex flex-wrap items-end gap-3">
+            <label class="flex flex-col gap-1">
+              <span class="text-xs font-semibold uppercase opacity-60">Domain</span>
+              <select id="playground-domain" class="select select-sm w-28 font-mono"
+                title="Only list models of this hardware domain"></select>
+            </label>
             <label class="flex flex-col gap-1">
               <span class="text-xs font-semibold uppercase opacity-60">Target model</span>
               <select id="playground-target" class="select select-sm w-64 font-mono"
@@ -172,7 +203,8 @@
     <footer class="flex flex-col gap-3 border-t border-base-300 pt-4">
       <div id="service-list" class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm"></div>
       <p class="text-center text-xs opacity-40">
-        GMKtec EVO-X2 • AMD Ryzen AI Max+ 395 128GB unified memory • dynamic single-workload architecture
+        GMKtec EVO-X2 • AMD Ryzen AI Max+ 395 128GB unified memory • dual-domain workload
+        locking (one GPU + one NPU workload concurrently)
       </p>
     </footer>
 

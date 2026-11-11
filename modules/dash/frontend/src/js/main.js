@@ -6,7 +6,7 @@ import { clearNotify, initNotify, notify } from "./notify.js";
 import { clearPlaygroundTargetPick, initPlayground, setPlaygroundTarget } from "./playground.js";
 import { initModels, renderModels } from "./models.js";
 import { initServices, renderServices } from "./services.js";
-import { inferenceTarget, POLL_INTERVAL_MS, state } from "./state.js";
+import { findModel, modelDevice, POLL_INTERVAL_MS, state } from "./state.js";
 import { readTelemetry } from "./telemetry.js";
 import { initWorkload, renderWorkload } from "./workload.js";
 
@@ -22,7 +22,15 @@ function renderStatusDot(online) {
 }
 
 function applyStatus(data) {
-  state.active = data.active_model ?? null;
+  const gpu = data.active_gpu_model ?? null;
+  const npu = data.active_npu_model ?? null;
+  state.active = { gpu, npu };
+
+  // Talk to an older API that only reports one workload: attribute it to its own domain.
+  if (!gpu && !npu && data.active_model) {
+    state.active[modelDevice(data.active_model)] = data.active_model;
+  }
+
   state.models = data.models ?? [];
   state.services = data.services ?? [];
 
@@ -37,7 +45,7 @@ function applyStatus(data) {
   renderWorkload();
   renderServices(state.services);
   renderModels();
-  setPlaygroundTarget(inferenceTarget());
+  setPlaygroundTarget();
 }
 
 async function refresh() {
@@ -51,37 +59,43 @@ async function refresh() {
 }
 
 async function handleSwitch(name) {
-  if (state.switching) return;
-  state.switching = true;
+  const model = findModel(name);
+  const device = model ? modelDevice(model) : "gpu";
+  if (state.switching.gpu || state.switching.npu) return;
+  state.switching[device] = true;
   state.pending = name;
   clearPlaygroundTargetPick(); // an explicit switch owns the playground target again
   renderWorkload();
   renderModels();
   try {
-    await switchModel(name);
+    await switchModel(name); // the API derives the domain from the model itself
     clearNotify();
   } catch (error) {
     notify(`Model switch failed: ${error.message}`);
   } finally {
-    state.switching = false;
+    state.switching[device] = false;
     state.pending = null;
     await refresh();
   }
 }
 
-async function handleUnload() {
-  if (state.switching) return;
-  if (!window.confirm("Unload the active workload and release unified memory?")) return;
-  state.switching = true;
+async function handleUnload(device) {
+  if (state.switching[device]) return;
+  const label = device === "npu" ? "NPU workload" : "GPU workload";
+  const extra = device === "npu" ? "" : " and release unified memory";
+  if (!window.confirm(`Unload the active ${label}${extra}? The ${device === "npu" ? "GPU" : "NPU"} workload keeps running.`)) {
+    return;
+  }
+  state.switching[device] = true;
   state.pending = null;
   renderWorkload();
   try {
-    await stopWorkloads();
+    await stopWorkloads(device);
     clearNotify();
   } catch (error) {
     notify(`Unload failed: ${error.message}`);
   } finally {
-    state.switching = false;
+    state.switching[device] = false;
     await refresh();
   }
 }

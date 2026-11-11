@@ -9,8 +9,10 @@
   # Serialized model and workload metadata from global registry contract
   modelsConfig = {
     default_model = config.services.defaultModel;
-    lock_file = "/run/model-lock/model.lock";
-    state_file = "/run/model-lock/active_model";
+    lock_files = config.services.workload-manager.lockFiles;
+    state_files = config.services.workload-manager.stateFiles;
+    gpu_exclusive_units = config.services.workload-manager.gpuExclusiveUnits;
+    npu_exclusive_units = config.services.workload-manager.npuExclusiveUnits;
     all_exclusive_units = config.services.workload-manager.allExclusiveUnits;
     services =
       [
@@ -45,12 +47,15 @@
       });
     models =
       lib.mapAttrs (_: m: {
+        device = m.device;
         service_name = m.serviceName;
         remapped_model = m.remappedModel;
         url = m.url;
         description = m.description;
         type = m.type;
         sessions = m.sessions;
+        capabilities = m.capabilities;
+        model_dir = m.modelDir;
       })
       config.services.models;
   };
@@ -60,11 +65,13 @@
   # Static frontend (Tailwind 4 + daisyUI 5 + Lightweight Charts), built at build time
   dashboardFrontend = import ./frontend.nix {inherit pkgs lib;};
 
-  # Classic OpenAI /v1/models payload generated at Nix eval time
+  # Classic OpenAI /v1/models payload generated at Nix eval time.
+  # `device` + `capabilities` are non-standard extras so a client can tell an embedding
+  # model from a chat or image model (and which accelerator answers) without guessing.
   openaiModelsJson = {
     object = "list";
     data =
-      lib.mapAttrsToList (name: _: {
+      lib.mapAttrsToList (name: m: {
         id = name;
         object = "model";
         created = 1700000000;
@@ -72,6 +79,8 @@
         permission = [];
         root = name;
         parent = null;
+        device = m.device;
+        capabilities = m.capabilities;
       })
       config.services.models;
   };

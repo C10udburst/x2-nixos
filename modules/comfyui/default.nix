@@ -55,6 +55,7 @@
     timeoutSec = cfg.timeoutSec;
     description = "ComfyUI ROCm backend";
     stopScript = config.services.workload-manager.stopScript;
+    device = "gpu";
   };
 in {
   disabledModules = ["services/misc/comfyui.nix"];
@@ -193,11 +194,11 @@ in {
         ];
 
         ExecStartPre = [
-          "/bin/sh -c '${pkgs.coreutils}/bin/echo comfyui > /run/model-lock/active_model && ${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_model'"
+          "/bin/sh -c '${pkgs.coreutils}/bin/echo comfyui > /run/model-lock/active_gpu && ${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_gpu'"
         ];
         ExecStart = "${launcher}";
         ExecStopPost = [
-          "/bin/sh -c 'if [ \"$(${pkgs.coreutils}/bin/cat /run/model-lock/active_model 2>/dev/null)\" = comfyui ]; then ${pkgs.coreutils}/bin/rm -f /run/model-lock/active_model; fi'"
+          "/bin/sh -c 'if [ \"$(${pkgs.coreutils}/bin/cat /run/model-lock/active_gpu 2>/dev/null)\" = comfyui ]; then ${pkgs.coreutils}/bin/rm -f /run/model-lock/active_gpu; fi'"
         ];
 
         KillSignal = "SIGINT";

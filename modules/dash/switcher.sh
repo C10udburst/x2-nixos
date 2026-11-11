@@ -3,10 +3,13 @@ set -euo pipefail
 
 # Ultra-fast FastCGI model switcher for unified AI inference hot path (/v1/*).
 # GMKtec EVO-X2 (AMD Ryzen AI Max+ 395 128GB Unified Memory).
+#
+# Dual-domain locking (Rule 1 is enforced PER DOMAIN):
+#   gpu -> /run/model-lock/gpu.lock + active_gpu   (RDNA 3.5 iGPU)
+#   npu -> /run/model-lock/npu.lock + active_npu   (Ryzen AI XDNA 2)
+# Acquiring one domain never stops a workload of the other domain.
 
 CONFIG_FILE="${MODELS_CONFIG_PATH:-/etc/models.json}"
-LOCK_FILE="/run/model-lock/model.lock"
-STATE_FILE="/run/model-lock/active_model"
 
 # 1. CORS Preflight
 if [ "${REQUEST_METHOD:-GET}" = "OPTIONS" ]; then
@@ -38,21 +41,34 @@ if [ -z "$REQ_MODEL" ] && [ -n "${HTTP_X_MODEL:-}" ]; then
   REQ_MODEL="$HTTP_X_MODEL"
 fi
 
-# Fallback to default_model or currently active model
+# Fallback to default_model, then to whichever domain is warm (GPU first, then NPU)
 if [ -z "$REQ_MODEL" ] && [ -f "$CONFIG_FILE" ]; then
   REQ_MODEL=$(jq -r '.default_model // empty' "$CONFIG_FILE" 2>/dev/null || true)
 fi
-if [ -z "$REQ_MODEL" ] && [ -f "$STATE_FILE" ]; then
-  REQ_MODEL=$(cat "$STATE_FILE" 2>/dev/null || true)
+if [ -z "$REQ_MODEL" ]; then
+  for fallback_state in /run/model-lock/active_gpu /run/model-lock/active_npu; do
+    if [ -f "$fallback_state" ]; then
+      REQ_MODEL=$(cat "$fallback_state" 2>/dev/null || true)
+      [ -n "$REQ_MODEL" ] && break
+    fi
+  done
 fi
 
-# 4. Lookup model in configuration registry
-MODEL_ENTRY=""
+# 4. Lookup model in configuration registry - one jq call for the whole entry
+ENTRY_VARS=""
 if [ -n "$REQ_MODEL" ] && [ -f "$CONFIG_FILE" ]; then
-  MODEL_ENTRY=$(jq -c --arg m "$REQ_MODEL" '.models[$m] // empty' "$CONFIG_FILE" 2>/dev/null || true)
+  ENTRY_VARS=$(jq -r --arg m "$REQ_MODEL" '
+    .models[$m] // null
+    | if . == null then "" else
+        "DEVICE=\((.device // "gpu") | @sh)\n" +
+        "TARGET_SERVICE=\(.service_name | @sh)\n" +
+        "REMAPPED_MODEL=\((.remapped_model // "") | @sh)\n" +
+        "TARGET_URL=\(.url | @sh)\n" +
+        "MODEL_DIR=\((.model_dir // "") | @sh)"
+      end' "$CONFIG_FILE" 2>/dev/null || true)
 fi
 
-if [ -z "$MODEL_ENTRY" ]; then
+if [ -z "$ENTRY_VARS" ]; then
   printf "Status: 404 Not Found\r\n"
   printf "Content-Type: application/json\r\n"
   printf "Access-Control-Allow-Origin: *\r\n\r\n"
@@ -60,25 +76,44 @@ if [ -z "$MODEL_ENTRY" ]; then
   exit 0
 fi
 
-TARGET_SERVICE=$(echo "$MODEL_ENTRY" | jq -r '.service_name')
-REMAPPED_MODEL=$(echo "$MODEL_ENTRY" | jq -r '.remapped_model // empty')
-TARGET_URL=$(echo "$MODEL_ENTRY" | jq -r '.url')
+# shellcheck disable=SC2046 $(eval) of jq @sh-quoted assignments
+eval "$ENTRY_VARS"
+
+if [ -z "${TARGET_SERVICE:-}" ] || [ -z "${TARGET_URL:-}" ]; then
+  printf "Status: 500 Internal Server Error\r\n"
+  printf "Content-Type: application/json\r\n\r\n"
+  printf '{"error":{"message":"Registry entry is missing service_name or url","type":"server_error"}}\n'
+  exit 0
+fi
+
+# Domain routing: lock + state file of the requested model's domain only
+LOCK_FILE="/run/model-lock/${DEVICE}.lock"
+STATE_FILE="/run/model-lock/active_${DEVICE}"
+
+# Fail fast (and without touching the domain) when the weights were never downloaded
+if [ -n "$MODEL_DIR" ] && [ ! -d "$MODEL_DIR" ]; then
+  printf "Status: 503 Service Unavailable\r\n"
+  printf "Content-Type: application/json\r\n"
+  printf "Access-Control-Allow-Origin: *\r\n\r\n"
+  printf '{"error":{"message":"Model %s is not downloaded: %s is missing","type":"service_unavailable"}}\n' \
+    "$REQ_MODEL" "$MODEL_DIR"
+  exit 0
+fi
 
 ACTIVE_MODEL=""
 if [ -f "$STATE_FILE" ]; then
   ACTIVE_MODEL=$(cat "$STATE_FILE" 2>/dev/null || true)
 fi
 
-exec 9>"$LOCK_FILE"
-chmod 666 "$LOCK_FILE" 2>/dev/null || true
-
-# 5. Check if service is active; dynamic switch if needed
+# 5. Check if service is active; dynamic switch within the domain if needed
 SERVICE_ACTIVE=0
 if sudo -n "${SYSTEMCTL:-systemctl}" is-active --quiet "$TARGET_SERVICE" 2>/dev/null; then
   SERVICE_ACTIVE=1
 fi
 
 if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
+  exec 9>"$LOCK_FILE"
+  chmod 666 "$LOCK_FILE" 2>/dev/null || true
   flock -x 9
 
   # Re-check under lock
@@ -90,12 +125,12 @@ if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
   fi
 
   if [ "$REQ_MODEL" != "$ACTIVE_MODEL" ] || [ "$SERVICE_ACTIVE" -eq 0 ]; then
-    # Stop any other active heavy workloads using eval-time generated stop script
+    # Stop any other active workload OF THIS DOMAIN ONLY (eval-time generated stop script)
     if [ -n "${STOP_OTHER_WORKLOADS:-}" ] && [ -x "${STOP_OTHER_WORKLOADS:-}" ]; then
-      "$STOP_OTHER_WORKLOADS" "$TARGET_SERVICE"
+      "$STOP_OTHER_WORKLOADS" "$DEVICE" "$TARGET_SERVICE"
     fi
 
-    # Start target service (systemd Conflicts automatically stops other models)
+    # Start target service (systemd Conflicts handles intra-domain exclusion)
     if sudo -n "${SYSTEMCTL:-systemctl}" start "$TARGET_SERVICE" 2>/dev/null; then
       DEADLINE=$(( $(date +%s) + 180 ))
       READY=0

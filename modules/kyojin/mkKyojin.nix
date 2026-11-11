@@ -154,6 +154,7 @@
     exec ${kyojinPkg}/bin/kyojin-serve-${flavor} "''${ARGS[@]}"
   '';
 in {
+  device = "gpu";
   serviceName = "kyojin-${modelId}.service";
   type = "kyojin";
   inherit remappedModel description sessions;
@@ -188,11 +189,11 @@ in {
       ];
 
       ExecStartPre = [
-        "/bin/sh -c '${pkgs.coreutils}/bin/mkdir -p /var/lib/kyojin/tmp && ${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_model && (${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_model 2>/dev/null || true)'"
+        "/bin/sh -c '${pkgs.coreutils}/bin/mkdir -p /var/lib/kyojin/tmp && ${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_gpu && (${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_gpu 2>/dev/null || true)'"
       ];
       ExecStart = "${launcher}";
       ExecStopPost = [
-        "/bin/sh -c 'if [ \"$(${pkgs.coreutils}/bin/cat /run/model-lock/active_model 2>/dev/null)\" = ${lib.escapeShellArg modelId} ]; then ${pkgs.coreutils}/bin/rm -f /run/model-lock/active_model; fi'"
+        "/bin/sh -c 'if [ \"$(${pkgs.coreutils}/bin/cat /run/model-lock/active_gpu 2>/dev/null)\" = ${lib.escapeShellArg modelId} ]; then ${pkgs.coreutils}/bin/rm -f /run/model-lock/active_gpu; fi'"
       ];
 
       KillSignal = "SIGINT";

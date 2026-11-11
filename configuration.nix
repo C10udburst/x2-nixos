@@ -25,6 +25,10 @@
   # Boot with 0 VRAM used until models are downloaded to /srv/models
   services.defaultModel = null;
 
+  # Second inference domain: the XDNA 2 NPU runs its own single workload in parallel with the
+  # iGPU (per-domain Rule 1). See modules/npu/README.md for what AMD still blocks.
+  services.npu.enable = true;
+
   nixpkgs.overlays = [
     (final: prev: {
       pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [

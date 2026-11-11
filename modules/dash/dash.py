@@ -3,10 +3,13 @@
 Dashboard status and management API for GMKtec EVO-X2.
 GMKtec EVO-X2 (AMD Ryzen AI Max+ 395 128GB Unified Memory).
 
+Dual-domain workload model: the GPU (RDNA 3.5) and NPU (XDNA 2) domains hold at most one
+workload each and are switched, locked and unloaded independently.
+
 Provides:
 - /api/status: System RAM, GPU VRAM & GTT allocations, CPU load, defined services & model registry
-- /api/switch: Manually switch active LLM model
-- /api/stop: Stop active model or workload to free GPU memory
+- /api/switch: Manually switch the active model of that model's own domain
+- /api/stop: Stop workloads of one domain ({"device": "gpu"|"npu"}) or both (default "all")
 """
 
 import fcntl
@@ -20,7 +23,16 @@ import time
 from urllib.parse import parse_qs, urlparse
 
 CONFIG_PATH = os.environ.get("MODELS_CONFIG_PATH", os.environ.get("GUFO_CONFIG_PATH", "/etc/models.json"))
-CONFIG = {"models": {}, "default_model": None, "services": [], "all_exclusive_units": []}
+CONFIG = {
+    "models": {},
+    "default_model": None,
+    "services": [],
+    "gpu_exclusive_units": [],
+    "npu_exclusive_units": [],
+    "all_exclusive_units": [],
+    "lock_files": {},
+    "state_files": {},
+}
 
 if os.path.exists(CONFIG_PATH):
     try:
@@ -31,10 +43,26 @@ if os.path.exists(CONFIG_PATH):
 
 MODELS = CONFIG.get("models", {})
 SERVICES = CONFIG.get("services", [])
-ALL_EXCLUSIVE_UNITS = CONFIG.get("all_exclusive_units", [])
 SYSTEMCTL = os.environ.get("SYSTEMCTL", "systemctl")
-LOCK_FILE = CONFIG.get("lock_file", "/run/model-lock/model.lock")
-STATE_FILE = CONFIG.get("state_file", "/run/model-lock/active_model")
+
+DEVICES = ("gpu", "npu")
+DEFAULT_LOCK_FILES = {"gpu": "/run/model-lock/gpu.lock", "npu": "/run/model-lock/npu.lock"}
+DEFAULT_STATE_FILES = {"gpu": "/run/model-lock/active_gpu", "npu": "/run/model-lock/active_npu"}
+LOCK_FILES = {**DEFAULT_LOCK_FILES, **(CONFIG.get("lock_files") or {})}
+STATE_FILES = {**DEFAULT_STATE_FILES, **(CONFIG.get("state_files") or {})}
+
+
+def unit_list_for(device):
+    """Exclusive units of one domain, or of both domains for device='all'."""
+    if device == "all":
+        return list(CONFIG.get("all_exclusive_units") or [])
+    if device == "npu":
+        return list(CONFIG.get("npu_exclusive_units") or [])
+    return list(CONFIG.get("gpu_exclusive_units") or [])
+
+
+def model_device(name):
+    return (MODELS.get(name) or {}).get("device", "gpu")
 
 
 def send_headers(status="200 OK", content_type="application/json; charset=utf-8"):
@@ -63,28 +91,36 @@ def run_systemctl(action, unit):
         return False, "", str(e)
 
 
-def get_active_workload():
-    # 1. Check state file first
-    if os.path.exists(STATE_FILE):
+def get_active_workload(device="gpu"):
+    """Active workload id of one hardware domain ("" when that domain is idle)."""
+    state_file = STATE_FILES.get(device)
+
+    # 1. Check the domain state file first
+    if state_file and os.path.exists(state_file):
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
+            with open(state_file, "r", encoding="utf-8") as f:
                 name = f.read().strip()
                 if name:
                     return name
         except Exception:
             pass
 
-    # 2. Check standalone / on-demand heavy services (never gateway reverse proxy)
+    # 2. Check standalone / on-demand heavy services of this domain (never the gateway)
+    domain_units = set(unit_list_for(device))
     for svc in SERVICES:
-        if svc.get("type") == "on-demand":
-            unit = svc.get("unit")
-            if unit:
-                ok, out, _ = run_systemctl("is-active", unit)
-                if ok and out == "active":
-                    return svc.get("id")
+        if svc.get("type") != "on-demand":
+            continue
+        unit = svc.get("unit")
+        if not unit or unit not in domain_units:
+            continue
+        ok, out, _ = run_systemctl("is-active", unit)
+        if ok and out == "active":
+            return svc.get("id")
 
-    # 3. Check registered models
+    # 3. Check registered models of this domain
     for name, mcfg in MODELS.items():
+        if mcfg.get("device", "gpu") != device:
+            continue
         unit = mcfg.get("service_name", f"model-{name}.service")
         ok, out, _ = run_systemctl("is-active", unit)
         if ok and out == "active":
@@ -359,7 +395,10 @@ def get_system_stats():
 
 
 def handle_status():
-    active = get_active_workload()
+    active_gpu = get_active_workload("gpu")
+    active_npu = get_active_workload("npu")
+    # Backward-compatible alias: the GPU domain is the historical "the" workload.
+    active = active_gpu or active_npu
     stats = get_system_stats()
 
     # Query status of defined subsystems and services
@@ -416,19 +455,24 @@ def handle_status():
                 btype = "kyojin"
             else:
                 btype = "custom"
+        device = mcfg.get("device", "gpu")
         model_list.append({
             "name": name,
             "alias": mcfg.get("remapped_model", name),
             "description": mcfg.get("description", ""),
             "backend_type": btype,
             "sessions": mcfg.get("sessions", 1),
-            "active": (name == active),
+            "device": device,
+            "capabilities": mcfg.get("capabilities", []),
+            "active": (name == (active_gpu if device == "gpu" else active_npu)),
         })
 
     payload = {
         "status": "ok",
         "active_model": active,
         "active_workload": active,
+        "active_gpu_model": active_gpu,
+        "active_npu_model": active_npu,
         "services": services_status,
         "models": model_list,
         **stats,
@@ -528,14 +572,26 @@ def handle_switch(body):
         sys.stdout.buffer.flush()
         return
 
-    lock_fd = acquire_lock(LOCK_FILE)
+    # The target model decides the domain: switching an NPU model never touches the GPU
+    # workload, and switching a GPU model leaves a warm NPU model alone.
+    device = model_device(target)
+    mcfg = MODELS[target]
+    model_dir = mcfg.get("model_dir") or ""
+    if model_dir and not os.path.isdir(model_dir):
+        send_headers(status="503 Service Unavailable")
+        sys.stdout.buffer.write(
+            json.dumps({"error": f"Model '{target}' is not downloaded: {model_dir} is missing"}).encode("utf-8")
+        )
+        sys.stdout.buffer.flush()
+        return
+
+    lock_fd = acquire_lock(LOCK_FILES[device])
     try:
-        mcfg = MODELS[target]
         target_unit = mcfg.get("service_name", f"model-{target}.service")
         target_url = mcfg.get("url", "http://127.0.0.1:8081")
 
-        # Stop all other exclusive heavy workloads calculated at eval time
-        for unit in ALL_EXCLUSIVE_UNITS:
+        # Stop the other exclusive workloads OF THIS DOMAIN calculated at eval time
+        for unit in unit_list_for(device):
             if unit != target_unit:
                 run_systemctl("stop", unit)
 
@@ -555,9 +611,11 @@ def handle_switch(body):
             time.sleep(0.2)
 
         if ready:
-            set_state_file(STATE_FILE, target)
+            set_state_file(STATE_FILES[device], target)
             send_headers()
-            sys.stdout.buffer.write(json.dumps({"status": "switched", "active_model": target}).encode("utf-8"))
+            sys.stdout.buffer.write(
+                json.dumps({"status": "switched", "active_model": target, "device": device}).encode("utf-8")
+            )
         else:
             send_headers(status="504 Gateway Timeout")
             sys.stdout.buffer.write(json.dumps({"error": "Model startup timed out"}).encode("utf-8"))
@@ -566,23 +624,51 @@ def handle_switch(body):
         release_lock(lock_fd)
 
 
-def handle_stop():
-    lock_fd = acquire_lock(LOCK_FILE)
-    try:
-        # Stop all exclusive heavy workloads calculated at eval time
-        for unit in ALL_EXCLUSIVE_UNITS:
-            run_systemctl("stop", unit)
+def parse_device(body):
+    """Device selector for /api/stop: 'gpu', 'npu' or 'all' (default)."""
+    device = "all"
+    if body:
+        text = body.decode("utf-8", errors="ignore")
+        try:
+            device = (json.loads(text).get("device") or "all").lower()
+        except Exception:
+            qs = parse_qs(text)
+            if "device" in qs:
+                device = qs["device"][0].lower()
+    if device not in ("gpu", "npu", "all"):
+        return None
+    return device
 
-        if os.path.exists(STATE_FILE):
-            try:
-                os.remove(STATE_FILE)
-            except Exception:
-                pass
+
+def handle_stop(body):
+    device = parse_device(body)
+    if device is None:
+        send_headers(status="400 Bad Request")
+        sys.stdout.buffer.write(json.dumps({"error": "device must be one of gpu, npu, all"}).encode("utf-8"))
+        sys.stdout.buffer.flush()
+        return
+
+    # Always take the locks in DEVICES order, so a "both domains" unload can never
+    # deadlock against a concurrent single-domain switch.
+    lock_fds = []
+    try:
+        for domain in DEVICES if device == "all" else (device,):
+            lock_fds.append(acquire_lock(LOCK_FILES[domain]))
+            for unit in unit_list_for(domain):
+                run_systemctl("stop", unit)
+            state_file = STATE_FILES.get(domain)
+            if state_file and os.path.exists(state_file):
+                try:
+                    os.remove(state_file)
+                except Exception:
+                    pass
+
         send_headers()
-        sys.stdout.buffer.write(json.dumps({"status": "stopped"}).encode("utf-8"))
+        sys.stdout.buffer.write(json.dumps({"status": "stopped", "device": device}).encode("utf-8"))
         sys.stdout.buffer.flush()
     finally:
-        release_lock(lock_fd)
+        for fd in reversed(lock_fds):
+            release_lock(fd)
 
 
 def main():
@@ -604,7 +690,7 @@ def main():
         elif clean_path in ("/api/switch", "/switch") and method == "POST":
             handle_switch(body)
         elif clean_path in ("/api/stop", "/stop") and method == "POST":
-            handle_stop()
+            handle_stop(body)
         else:
             send_headers(status="404 Not Found")
             sys.stdout.buffer.write(json.dumps({"error": f"API endpoint '{clean_path}' not found"}).encode("utf-8"))

@@ -2,7 +2,7 @@
 // active/switching state is patched in place so polling never re-renders cards.
 
 import { escapeHtml, setExclusiveClass } from "./dom.js";
-import { state } from "./state.js";
+import { findModel as findModelByName, state } from "./state.js";
 
 const BUTTON_VARIANTS = ["btn-primary", "btn-success"];
 const BORDER_VARIANTS = ["border-base-300", "border-success"];
@@ -16,9 +16,23 @@ function sessionLabel(sessions) {
   return count === 1 ? "1 session" : `${count} sessions`;
 }
 
+const DEVICE_BADGE = {
+  gpu: "badge-primary",
+  npu: "badge-secondary",
+};
+
+function deviceOf(model) {
+  return model.device === "npu" ? "npu" : "gpu";
+}
+
+function isActive(model) {
+  return model.name === state.active[deviceOf(model)];
+}
+
 function cardMarkup(model) {
   const name = escapeHtml(model.name);
-  const active = model.name === state.active;
+  const device = deviceOf(model);
+  const active = isActive(model);
   return `
     <article class="card card-border bg-base-200 shadow ${active ? "border-success" : "border-base-300"}"
              data-model-card="${name}">
@@ -29,12 +43,16 @@ function cardMarkup(model) {
         </div>
         <p class="line-clamp-2 text-sm opacity-70">${escapeHtml(model.description || "No description")}</p>
         <div class="flex flex-wrap gap-2">
+          <span class="badge ${DEVICE_BADGE[device]} badge-sm font-mono">${device.toUpperCase()}</span>
           <span class="badge badge-neutral badge-sm font-mono">${escapeHtml(model.backend_type || "custom")}</span>
           <span class="badge badge-ghost badge-sm font-mono">${escapeHtml(sessionLabel(model.sessions))}</span>
+          ${(model.capabilities ?? [])
+            .map((capability) => `<span class="badge badge-outline badge-sm font-mono">${escapeHtml(capability)}</span>`)
+            .join("")}
         </div>
         <div class="card-actions justify-end">
           <button class="btn btn-sm ${active ? "btn-success" : "btn-primary"}" type="button" data-switch="${name}"
-                  ${active || state.switching ? "disabled" : ""}>Switch model</button>
+                  ${active || state.switching.gpu || state.switching.npu ? "disabled" : ""}>Switch model</button>
         </div>
       </div>
     </article>
@@ -62,30 +80,42 @@ export function renderModels() {
     return;
   }
 
-  const nextRegistry = models.map((m) => `${m.name}:${m.backend_type}:${m.sessions}:${m.description}`).join("|");
+  const nextRegistry = models
+    .map((m) => `${m.name}:${m.backend_type}:${m.sessions}:${m.device}:${(m.capabilities ?? []).join(",")}:${m.description}`)
+    .join("|");
   if (nextRegistry !== registrySignature) {
     registrySignature = nextRegistry;
     viewSignature = "";
     container.innerHTML = models.map(cardMarkup).join("");
   }
 
-  const nextView = `${state.active}|${state.switching}`;
+  const nextView = `${state.active.gpu}|${state.active.npu}|${state.switching.gpu}|${state.switching.npu}`;
   if (nextView === viewSignature) return;
   viewSignature = nextView;
 
+  const switching = state.switching.gpu || state.switching.npu;
+
   for (const card of container.querySelectorAll("[data-model-card]")) {
     const name = card.dataset.modelCard;
-    const isActive = name === state.active;
+    const model = findModelByName(name);
+    const device = model ? deviceOf(model) : "gpu";
+    const active = Boolean(model) && isActive(model);
 
-    setExclusiveClass(card, isActive ? "border-success" : "border-base-300", BORDER_VARIANTS);
+    setExclusiveClass(card, active ? "border-success" : "border-base-300", BORDER_VARIANTS);
 
     const badge = card.querySelector("[data-model-active]");
-    if (badge) badge.hidden = !isActive;
+    if (badge) badge.hidden = !active;
 
     const button = card.querySelector("[data-switch]");
     if (!button) continue;
-    button.textContent = isActive ? "Loaded in VRAM" : state.switching ? "Switching…" : "Switch model";
-    button.disabled = isActive || state.switching;
-    setExclusiveClass(button, isActive ? "btn-success" : "btn-primary", BUTTON_VARIANTS);
+    button.textContent = active
+      ? device === "npu"
+        ? "Loaded on NPU"
+        : "Loaded in VRAM"
+      : switching
+        ? "Switching…"
+        : "Switch model";
+    button.disabled = active || switching;
+    setExclusiveClass(button, active ? "btn-success" : "btn-primary", BUTTON_VARIANTS);
   }
 }

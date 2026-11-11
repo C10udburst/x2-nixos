@@ -9,6 +9,7 @@
   timeoutSec ? 60,
   description ? serviceName,
   stopScript,
+  device ? "gpu",
 }:
 pkgs.writeShellScript "wake-netcat-${workloadId}" ''
   set -euo pipefail
@@ -20,8 +21,8 @@ pkgs.writeShellScript "wake-netcat-${workloadId}" ''
     pkgs.netcat-openbsd
   ]}:$PATH"
 
-  LOCK_FILE="/run/model-lock/model.lock"
-  STATE_FILE="/run/model-lock/active_model"
+  LOCK_FILE="/run/model-lock/${device}.lock"
+  STATE_FILE="/run/model-lock/active_${device}"
   BACKEND_PORT="${toString backendPort}"
 
   # 1. Acquire independent workload lock
@@ -32,8 +33,8 @@ pkgs.writeShellScript "wake-netcat-${workloadId}" ''
   # 2. Check if already the active workload
   ACTIVE=$(cat "$STATE_FILE" 2>/dev/null || true)
   if [ "$ACTIVE" != "${workloadId}" ]; then
-    # Stop any other active workload using eval-time generated stop script
-    ${stopScript} "${serviceName}"
+    # Stop any other active workload OF THIS DOMAIN using the eval-time generated stop script
+    ${stopScript} ${device} "${serviceName}"
 
     # Start target backend service
     sudo -n ${pkgs.systemd}/bin/systemctl start "${serviceName}"
