@@ -108,8 +108,7 @@ in {
   device = "gpu";
   serviceName = "llama-cpp-${modelId}.service";
   type = "llama-cpp";
-  inherit remappedModel description;
-  sessions = sessions;
+  inherit remappedModel description sessions context;
   url = "http://127.0.0.1:${toString port}";
 
   systemdService = {

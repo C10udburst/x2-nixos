@@ -45,7 +45,7 @@ let
 in
 {
   # NOTE: ./mkNpuModel.nix is *not* a module - it is a plain factory called from
-  # modules/models.nix, exactly like ./../gufo/mkGufo.nix.
+  # models/npu.nix, exactly like ./../gufo/mkGufo.nix is called from models/gpu.nix.
 
   options.services.npu = {
     enable = lib.mkEnableOption "AMD Ryzen AI NPU inference domain";
@@ -126,47 +126,15 @@ in
       boot.kernelModules = [ "amdxdna" ];
     })
 
-    (lib.mkIf cfg.enable {
-      # The wheel environment is validated at build time, so a start-up failure here means the
-      # host itself is the problem (missing device node, wrong group).
-      systemd.services.npu-runtime-check = {
-        description = "Verify the AMD Ryzen AI NPU stack is usable";
-        after = [ "systemd-udev-settle.service" ];
-        wants = [ "systemd-udev-settle.service" ];
-        wantedBy = [ "multi-user.target" ];
-        environment = cfg.runtimeEnv;
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          User = cfg.user;
-          Group = npuGroup;
-          SupplementaryGroups = [ npuGroup ];
-        };
-        script = ''
-          ${cfg.pythonPackage}/bin/python3 - <<'PY'
-          import os
-          import sys
-
-          import onnxruntime as ort
-
-          device = "${cfg.device}"
-          if not os.path.exists(device):
-              print(f"NPU: {device} missing - is the amdxdna driver loaded?", file=sys.stderr)
-              sys.exit(1)
-
-          providers = ort.get_available_providers()
-          print(f"NPU: onnxruntime {ort.__version__} providers={providers}")
-          if "VitisAIExecutionProvider" not in providers:
-              print("NPU: VitisAIExecutionProvider is not registered", file=sys.stderr)
-              sys.exit(1)
-          PY
-        '';
-      };
-    })
-
     {
       # Users and groups exist unconditionally so mkNpuModel units can reference them,
       # mirroring modules/gufo/default.nix and modules/kyojin/default.nix.
+      #
+      # There is deliberately no boot-time "is the NPU stack sane?" unit: the wheel environment
+      # is validated in the derivations' check phases (packages/ryzen-ai.nix asserts that the
+      # VitisAI execution provider registers) and the domain itself is proven on this host by
+      # the runners. `services.npu.enable` therefore only decides whether ./mkNpuModel entries
+      # join the registry (see models/npu.nix).
       users.users.${cfg.user} = {
         isSystemUser = true;
         group = npuGroup;

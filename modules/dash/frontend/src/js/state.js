@@ -3,6 +3,9 @@
 // The box runs two independent workload domains: the GPU (RDNA 3.5 unified memory pool)
 // and the NPU (Ryzen AI XDNA 2). Each holds at most one workload, and one domain can be
 // loaded while the other is idle or busy.
+//
+// Two sources feed this state: /v1/models (static registry, loaded once) and /api/status
+// (telemetry + the active workload id per domain, polled).
 
 export const POLL_INTERVAL_MS = 2500;
 
@@ -14,7 +17,9 @@ export const DEVICES = [
 export const state = {
   online: false,
   active: { gpu: null, npu: null },
+  // Static registry from /v1/models, fetched once per page load (see api.fetchModels).
   models: [],
+  modelsLoaded: false,
   services: [],
   switching: { gpu: false, npu: false },
   pending: null,

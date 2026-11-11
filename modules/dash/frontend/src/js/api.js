@@ -17,6 +17,29 @@ export async function fetchStatus() {
   return res.json();
 }
 
+// The model registry: an OpenAI /v1/models list generated at Nix eval time and served as a
+// static file by nginx (see modules/dash/default.nix). The dashboard loads it ONCE - it is
+// configuration, not telemetry - and pairs it with the live active_*_model ids to know what
+// is resident. Normalised here so the rest of the app never deals with the wire shape.
+export async function fetchModels() {
+  const res = await fetch("/v1/models", { cache: "no-store" });
+  if (!res.ok) throw new Error(`/v1/models -> ${res.status}`);
+  const payload = await res.json();
+
+  return (payload.data ?? []).map((entry) => ({
+    name: entry.id,
+    description: entry.description ?? "",
+    backend: entry.backend || "custom",
+    device: entry.device === "npu" ? "npu" : "gpu",
+    sessions: Number.isFinite(entry.sessions) ? entry.sessions : 1,
+    // null = the runner picks its own window; rendered as an em dash, never as 0.
+    contextLength: Number.isFinite(entry.context_length) && entry.context_length > 0
+      ? entry.context_length
+      : null,
+    capabilities: entry.capabilities ?? [],
+  }));
+}
+
 export async function switchModel(model) {
   await request("/api/switch", {
     method: "POST",

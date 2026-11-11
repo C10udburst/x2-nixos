@@ -54,6 +54,7 @@
         description = m.description;
         type = m.type;
         sessions = m.sessions;
+        context = m.context;
         capabilities = m.capabilities;
         model_dir = m.modelDir;
       })
@@ -65,9 +66,15 @@
   # Static frontend (Tailwind 4 + daisyUI 5 + Lightweight Charts), built at build time
   dashboardFrontend = import ./frontend.nix {inherit pkgs lib;};
 
-  # Classic OpenAI /v1/models payload generated at Nix eval time.
-  # `device` + `capabilities` are non-standard extras so a client can tell an embedding
-  # model from a chat or image model (and which accelerator answers) without guessing.
+  # Classic OpenAI /v1/models payload generated at Nix eval time - THE model listing for
+  # both API clients and the dashboard (it is fetched once on page load), which is why
+  # /api/status no longer serializes the registry itself.
+  #
+  # `device`, `backend`, `context_length`, `sessions`, `description` and `capabilities` are
+  # non-standard extras so a client can tell an embedding model from a chat or image model,
+  # which accelerator answers, and what the window costs, without guessing. Whether an entry
+  # is currently loaded is NOT here: this file is static, and the live answer comes from
+  # /api/status `active_gpu_model` / `active_npu_model` matched against `id`.
   openaiModelsJson = {
     object = "list";
     data =
@@ -76,10 +83,13 @@
         object = "model";
         created = 1700000000;
         owned_by = "evo-x2";
-        permission = [];
         root = name;
         parent = null;
         device = m.device;
+        backend = m.type;
+        context_length = m.context;
+        sessions = m.sessions;
+        description = m.description;
         capabilities = m.capabilities;
       })
       config.services.models;

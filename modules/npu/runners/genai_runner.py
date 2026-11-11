@@ -47,7 +47,11 @@ class ChatRunner:
             config = json.load(handle)
         model_cfg = config.get("model", {})
         search = config.get("search", {})
-        self.context_length = int(model_cfg.get("context_length", 8192))
+        # Precedence: registry override (NPU_CONTEXT_LENGTH is exactly what /v1/models reports
+        # and what the dashboard filters on) -> the artifact's genai_config.json -> default.
+        self.context_length = int(
+            os.environ.get("NPU_CONTEXT_LENGTH") or model_cfg.get("context_length", 8192)
+        )
 
         # Defaults come from the model's own genai_config.json - never duplicated in Nix.
         self.defaults = {

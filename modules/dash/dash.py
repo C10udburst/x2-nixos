@@ -7,7 +7,11 @@ Dual-domain workload model: the GPU (RDNA 3.5) and NPU (XDNA 2) domains hold at 
 workload each and are switched, locked and unloaded independently.
 
 Provides:
-- /api/status: System RAM, GPU VRAM & GTT allocations, CPU load, defined services & model registry
+- /api/status: System RAM, GPU VRAM & GTT allocations, CPU load, defined services and the
+  active workload of each domain. It deliberately does NOT serialize the model registry:
+  the gateway serves that as static JSON on /v1/models (see modules/dash/default.nix) and
+  the dashboard fetches it once on page load. "Is this model loaded?" is answered on the
+  client by comparing the registry id against active_gpu_model / active_npu_model.
 - /api/switch: Manually switch the active model of that model's own domain
 - /api/stop: Stop workloads of one domain ({"device": "gpu"|"npu"}) or both (default "all")
 """
@@ -79,8 +83,8 @@ def send_headers(status="200 OK", content_type="application/json; charset=utf-8"
     sys.stdout.buffer.flush()
 
 
-def run_systemctl(action, unit):
-    cmd = [SYSTEMCTL, action, unit]
+def run_systemctl(*args):
+    cmd = [SYSTEMCTL] + list(args)
     if os.geteuid() != 0:
         sudo_bin = "/run/wrappers/bin/sudo" if os.path.exists("/run/wrappers/bin/sudo") else "sudo"
         cmd = [sudo_bin, "-n"] + cmd
@@ -91,7 +95,55 @@ def run_systemctl(action, unit):
         return False, "", str(e)
 
 
-def get_active_workload(device="gpu"):
+def unit_states(units):
+    """ActiveState of many units in ONE systemctl round-trip -> {unit: state}.
+
+    The status endpoint is polled every few seconds, and deciding "which workload is
+    resident" means looking at every exclusive unit of both domains. Shelling out
+    `systemctl is-active` per unit is the single most expensive thing this CGI does, so the
+    whole set is queried in one call. An empty result means the batch query was unusable
+    (old systemd, permission oddities) and callers fall back to per-unit checks.
+    """
+    units = [u for u in units if u]
+    if not units:
+        return {}
+
+    _, out, _ = run_systemctl("show", "--no-pager", "-p", "Id", "-p", "ActiveState", *units)
+    states = {}
+    current = None
+    for line in (out or "").splitlines():
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        if key == "Id":
+            current = value or None
+            if current:
+                states.setdefault(current, "inactive")
+        elif key == "ActiveState" and current:
+            states[current] = value
+    return states
+
+
+def listed_service_units():
+    """Every systemd unit the services list references (backends *and* listener sockets)."""
+    units = []
+    for svc in SERVICES:
+        for key in ("unit", "socket_unit"):
+            unit = svc.get(key)
+            if unit and unit not in units:
+                units.append(unit)
+    return units
+
+
+def is_unit_active(unit, states=None):
+    """Batch lookup when a caller pre-fetched `states`, otherwise ask systemd directly."""
+    if states is not None:
+        return states.get(unit) == "active"
+    ok, out, _ = run_systemctl("is-active", unit)
+    return ok and out == "active"
+
+
+def get_active_workload(device="gpu", states=None):
     """Active workload id of one hardware domain ("" when that domain is idle)."""
     state_file = STATE_FILES.get(device)
 
@@ -113,8 +165,7 @@ def get_active_workload(device="gpu"):
         unit = svc.get("unit")
         if not unit or unit not in domain_units:
             continue
-        ok, out, _ = run_systemctl("is-active", unit)
-        if ok and out == "active":
+        if is_unit_active(unit, states):
             return svc.get("id")
 
     # 3. Check registered models of this domain
@@ -122,8 +173,7 @@ def get_active_workload(device="gpu"):
         if mcfg.get("device", "gpu") != device:
             continue
         unit = mcfg.get("service_name", f"model-{name}.service")
-        ok, out, _ = run_systemctl("is-active", unit)
-        if ok and out == "active":
+        if is_unit_active(unit, states):
             return name
 
     return None
@@ -394,9 +444,32 @@ def get_system_stats():
     }
 
 
+def status_probe_units():
+    """Every unit the status handler inspects, deduplicated.
+
+    The exclusive-unit lists come from the generated registry file; the model units are added
+    from the registry as well, so a stale or older config can never leave a loaded model out
+    of the batch (anything missing from the map would read as "not active").
+    """
+    candidates = (
+        unit_list_for("all")
+        + [mcfg.get("service_name") for mcfg in MODELS.values()]
+        + listed_service_units()
+    )
+    units = []
+    for unit in candidates:
+        if unit and unit not in units:
+            units.append(unit)
+    return units
+
+
 def handle_status():
-    active_gpu = get_active_workload("gpu")
-    active_npu = get_active_workload("npu")
+    # One `systemctl show` for every unit this handler touches (both exclusive workload
+    # sets plus the gateway / on-demand service and socket units), then pure dict lookups.
+    states = unit_states(status_probe_units()) or None
+
+    active_gpu = get_active_workload("gpu", states)
+    active_npu = get_active_workload("npu", states)
     # Backward-compatible alias: the GPU domain is the historical "the" workload.
     active = active_gpu or active_npu
     stats = get_system_stats()
@@ -407,19 +480,12 @@ def handle_status():
         unit = s.get("unit")
         socket_unit = s.get("socket_unit")
 
-        is_unit_active = False
-        if unit:
-            ok, out, _ = run_systemctl("is-active", unit)
-            is_unit_active = (ok and out == "active")
+        unit_active = is_unit_active(unit, states) if unit else False
+        socket_active = is_unit_active(socket_unit, states) if socket_unit else False
 
-        is_socket_active = False
-        if socket_unit:
-            ok, out, _ = run_systemctl("is-active", socket_unit)
-            is_socket_active = (ok and out == "active")
-
-        if is_unit_active:
+        if unit_active:
             status = "active"
-        elif is_socket_active:
+        elif socket_active:
             status = "standby"
         elif s.get("type") == "gateway":
             status = "active"
@@ -436,37 +502,8 @@ def handle_status():
             "description": s.get("description", ""),
         })
 
-    model_list = []
-    for name, mcfg in MODELS.items():
-        btype = mcfg.get("type")
-        if not btype or btype == "unknown":
-            unit = mcfg.get("service_name", "")
-            if unit.startswith("llama-cpp-"):
-                btype = "llama-cpp"
-            elif unit.startswith("gufo-"):
-                btype = "gufo"
-            elif unit.startswith("kyojin-"):
-                btype = "kyojin"
-            elif "llama" in unit:
-                btype = "llama-cpp"
-            elif "gufo" in unit:
-                btype = "gufo"
-            elif "kyojin" in unit:
-                btype = "kyojin"
-            else:
-                btype = "custom"
-        device = mcfg.get("device", "gpu")
-        model_list.append({
-            "name": name,
-            "alias": mcfg.get("remapped_model", name),
-            "description": mcfg.get("description", ""),
-            "backend_type": btype,
-            "sessions": mcfg.get("sessions", 1),
-            "device": device,
-            "capabilities": mcfg.get("capabilities", []),
-            "active": (name == (active_gpu if device == "gpu" else active_npu)),
-        })
-
+    # No `models` key: the registry is static config and belongs to /v1/models, which the
+    # dashboard loads once. Only the two live workload ids are reported here.
     payload = {
         "status": "ok",
         "active_model": active,
@@ -474,7 +511,6 @@ def handle_status():
         "active_gpu_model": active_gpu,
         "active_npu_model": active_npu,
         "services": services_status,
-        "models": model_list,
         **stats,
     }
     send_headers()

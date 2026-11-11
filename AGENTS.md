@@ -52,7 +52,17 @@ digraph EVO_X2 {
 
 ## 2. Global Model Registry & Strict Contract
 
-LLM models are defined in `modules/models.nix` within `services.models.<model_id>`.
+Every model is one `services.models.<model_id>` entry. **`modules/models.nix` is scaffold
+only** - it declares the contract below, builds the engine factories and instantiates one
+systemd unit per entry. The raw declarations live one file per hardware domain:
+
+| file | contents |
+| --- | --- |
+| `models/gpu.nix` | RDNA 3.5 iGPU models (`mkGufo`, `mkLlamaCpp`, `mkKyojin`) |
+| `models/npu.nix` | XDNA 2 models (`mkNpuModel`), gated on `services.npu.enable` |
+
+Both receive `mkGufo` / `mkLlamaCpp` / `mkKyojin` / `mkNpuModel` through `_module.args`, so a
+registry file has no imports and no logic of its own.
 
 ### The Contract
 Every model entry in `services.models` MUST adhere to the following attribute schema:
@@ -66,6 +76,8 @@ Every model entry in `services.models` MUST adhere to the following attribute sc
   description,     # (Optional) String: human-readable description for dashboard (default: "")
   type,            # (Optional) String: engine identifier ("gufo" | "llama-cpp" | "kyojin" | "npu-genai" | "npu-embeddings")
   sessions,        # (Optional) Int: maximum concurrent sessions / slots (default: 1)
+  context,         # (Optional) Int|null: context window per session in tokens (default: null,
+                   #            i.e. the runner decides). Reported as /v1/models context_length
   device,          # (Optional) String: "gpu" (default) | "npu" - which domain's lock/unit set it joins
   capabilities,    # (Optional) List String: OpenAI routes the runner serves ("chat",
                    #            "completions", "embeddings", ...); drives the dashboard badges
@@ -117,10 +129,11 @@ engine shape as `mkGufo`, selected by `kind` (`genai` | `embeddings` | `asr` | `
   port = 8083;
 };
 ```
-`modelPath` defaults to `modelId` and resolves against `services.npu.modelsDir`; the resulting
-`modelDir` is checked in `ExecStartPre` so weights that are not installed fail in the journal
-with the missing path instead of hanging the gateway. Weights are host state - no unit or
-module in this repo downloads anything.
+The weights directory is `services.npu.modelsDir/<modelId>`; it is checked in `ExecStartPre` so
+weights that are not installed fail in the journal with the missing path instead of hanging the
+gateway. Weights are host state - no unit or module in this repo downloads anything.
+`context` (optional) is the declared window: it is exported as `NPU_CONTEXT_LENGTH` and is what
+`/v1/models` reports as `context_length`.
 
 #### `mkKyojin` (`modules/kyojin/mkKyojin.nix`)
 Generates an ExLlamaV3/Kyojin inference service running native ROCm on gfx1151:
@@ -193,7 +206,8 @@ Both Immich ML and ComfyUI use the generic `mkWakeScript` helper:
 The gateway runs on **port 8080**:
 - **`/` & `/index.html`**: Static dashboard built from the frontend project (`modules/dash/frontend/`, served from the `modules/dash/frontend.nix` derivation).
 - **`/assets/*`**: Content-hashed JS/CSS bundles, served with `Cache-Control: public, max-age=31536000, immutable`; `index.html` is served with `no-cache` so a rebuild is picked up immediately.
-- **`/api/status`**: Dynamic API returning system memory, GPU VRAM & GTT, NPU busy/state, the active workload **of each domain**, the models list, and status for all defined services (Gateway, Immich ML, ComfyUI).
+- **`/api/status`**: Dynamic API returning system memory, GPU VRAM & GTT, NPU busy/state, the active workload **of each domain**, and status for all defined services (Gateway, Immich ML, ComfyUI). It deliberately carries **no model list** - that is static config and belongs to `/v1/models`.
+- **`/v1/models`** (and `/models`): the model registry as a classic OpenAI list, generated at Nix eval time and served by nginx straight from a file (`alias`), so it costs nothing and answers even while every workload is cold.
 - **`/v1/*`**: Hot-path Bash + `jq` switcher (`modules/dash/switcher.sh`) with request model remapping, per-domain routing and automatic workload unloading.
 
 ### Dual-domain API contract (`modules/dash/dash.py`)
@@ -205,14 +219,23 @@ The two domains are reported and controlled separately - nothing in the API impl
 | --- | --- |
 | `active_gpu_model` | model loaded on the iGPU (from `/run/model-lock/active_gpu`), `null` when idle |
 | `active_npu_model` | model loaded on the XDNA 2 NPU (from `/run/model-lock/active_npu`), `null` when idle |
-| `models[].device` | `"gpu"` or `"npu"` - which domain a model belongs to |
-| `models[].capabilities` | routes the runner serves (`chat`, `completions`, `embeddings`, …) |
-| `models[].model_dir` | weights path, pre-flight-checked by the switcher before starting anything |
 | `POST /api/switch {model}` | domain is derived from the model itself - the client never picks a lock |
 | `POST /api/stop {device}` | unload **one** domain; `device` is explicit so the dashboard can never evict the other side |
 
-`/v1/models` is served by the gateway from the registry (the runners deliberately expose no
-`/v1/models` of their own - one process, one model), and it includes `device` + `capabilities`.
+Deciding *"is this model loaded?"* is a client-side join: compare a `/v1/models` entry `id`
+against `active_gpu_model` / `active_npu_model` of its own domain.
+
+Every `/v1/models` `data[]` object is one registry entry, `id` being the registry key (the
+runners expose no `/v1/models` of their own - one process, one model):
+
+| field | source / meaning |
+| --- | --- |
+| `device` | `"gpu"` or `"npu"` - which domain the model belongs to |
+| `backend` | engine identifier (`gufo`, `llama-cpp`, `kyojin`, `npu-genai`, …) |
+| `context_length` | declared per-session context window in tokens, `null` when the runner picks |
+| `sessions` | concurrent slots the runner was started with |
+| `description` | human-readable one-liner for the dashboard |
+| `capabilities` | routes the runner serves (`chat`, `completions`, `embeddings`, …) |
 
 ### Dashboard UI (`modules/dash/frontend/`)
 
@@ -221,8 +244,18 @@ Tailwind CSS 4 + **daisyUI 5** (`data-theme="halloween"`) + **Lightweight Charts
 Frontend state mirrors the two domains: `state.active` and `state.switching` are `{gpu, npu}`
 objects (`src/js/state.js` exposes `DEVICES`, `modelsOfDevice()`, `inferenceTarget(device)`),
 the workload card renders one sub-card per domain with its own unload button, model cards carry
-a GPU/NPU badge plus capability badges, and the Playground has a domain selector so a chat can
-be pointed at the iGPU LLM or the NPU LLM independently.
+device / engine / session / context badges, and the Playground has a domain selector so a chat
+can be pointed at the iGPU LLM or the NPU LLM independently.
+
+The registry arrives **once** (`api.fetchModels()` -> `/v1/models`, retried from the poll loop
+until it lands) and `models.js` paints the grid from it; `/api/status` only moves the
+ACTIVE badge and the switch buttons. Above the grid, `modelFilters.js` keeps a purely local
+working set: search over name + description, an engine multiselect and a session-count
+multiselect (both option lists derived from the registry, "everything checked" = no
+restriction), plus a popout **dual-thumb range** over the declared context window on a log2
+scale (`css/app.css` draws the track/segment; `THUMB_PX` in `modelFilters.js` must match
+`--dual-thumb` there). Entries with `context_length: null` disappear as soon as the range is
+narrowed, because there is nothing to compare.
 
 Documentation for the libraries can be found at `https://daisyui.com/llms.txt` and `https://tradingview.github.io/lightweight-charts/docs_map.md`, only access it if needed.
 
@@ -242,7 +275,7 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
 ├── configuration.nix           # Host configuration and module imports
 ├── flake.nix                   # Flake inputs (nixpkgs, gufo, comfyui-nix, disko)
 ├── hardware-configuration.nix  # Host hardware and disk mounts
-└── modules/
+├── modules/
     ├── comfyui/
     │   └── default.nix         # ComfyUI on-demand service (flake-native)
     ├── dash/
@@ -253,7 +286,8 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     │   │   └── src/
     │   │       ├── index.html  # Markup template (halloween theme, asset markers)
     │   │       ├── css/app.css # Tailwind entry (@plugin "daisyui" with the halloween theme)
-    │   │       └── js/         # main.js + api, charts, models, playground, services, workload
+    │   │       └── js/         # main.js + api, charts, modelFilters, models, playground,
+    │   │                       # services, state, telemetry, workload
     │   ├── dash.py             # Telemetry & status Python CGI API
     │   └── switcher.sh         # Hot-path /v1/* FastCGI switcher with remapping
     ├── gufo/
@@ -271,7 +305,7 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     │   └── mkWakeScript.nix    # Generic netcat wake-on-request script generator
     ├── npu/
     │   ├── README.md           # NPU domain: packaging decisions, validated stack, AMD blockers
-    │   ├── default.nix         # services.npu: user, accel device, runtime env, stack self-check
+    │   ├── default.nix         # services.npu: user, accel device, runtime env, xrtDriver
     │   ├── mkNpuModel.nix      # mkNpuModel helper implementing strict model contract
     │   ├── packages/
     │   │   ├── ryzen-ai.nix    # AMD Ryzen AI 1.9.0 runtime as derivations (hash-pinned)
@@ -282,13 +316,16 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     │       ├── genai_runner.py # onnxruntime-genai -> /v1/chat/completions, /v1/completions
     │       └── embeddings_runner.py # ONNX + VitisAI EP -> /v1/embeddings
     ├── minimal.nix             # Kernel sysctl, 16GB swapfile, hf-download, tools
-    ├── models.nix              # Central models registry & workload coordinator
+    ├── models.nix              # Registry scaffold: contract, factories, unit instantiation
     ├── network.nix             # Static IP, DNS nameservers & gateway networking
     ├── nix.nix                 # Nix daemon, flakes, GC, and nix-command options
     ├── pkgs.nix                # System utility packages
     ├── tailscale.nix           # Tailscale mesh networking
     ├── users.nix               # User accounts & SSH keys
     └── workload-manager.nix    # Central eval-time exclusive workload manager
+└── models/
+    ├── gpu.nix                 # Raw services.models entries for the RDNA 3.5 iGPU
+    └── npu.nix                 # Raw services.models entries for the XDNA 2 NPU
 ```
 
 ---

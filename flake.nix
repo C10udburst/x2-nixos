@@ -33,21 +33,15 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
-      dashboardTest = pkgs.writeShellScriptBin "dashboard-test" ''
+      # There is no local mock server for the dashboard on purpose: /api/* is FastCGI on top
+      # of systemctl and /v1/* is the workload switcher, so neither can ever answer locally.
+      # Build the bundle here, deploy it, look at it on the host.
+      frontendBuild = pkgs.writeShellScriptBin "dashboard-build" ''
         set -e
         ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-        cd "$ROOT_DIR"
-
-        echo "==> 1. Building dashboard frontend (Tailwind 4 + daisyUI 5)..."
-        if [ ! -d "$ROOT_DIR/modules/dash/frontend/node_modules" ]; then
-          echo "Installing frontend dependencies..."
-          (cd "$ROOT_DIR/modules/dash/frontend" && npm ci)
-        fi
-        (cd "$ROOT_DIR/modules/dash/frontend" && npm run build)
-
-        echo ""
-        echo "==> 2. Starting local CGI server (backend FastCGI + frontend preview)..."
-        exec ${pkgs.python3}/bin/python3 "$ROOT_DIR/modules/dash/test-server.py" "$@"
+        cd "$ROOT_DIR/modules/dash/frontend"
+        [ -d node_modules ] || npm ci
+        npm run build
       '';
     in
     {
@@ -56,7 +50,7 @@
         packages = with pkgs; [
           nodejs
           python3
-          dashboardTest
+          frontendBuild
         ];
         shellHook = ''
           echo "============================================================"
@@ -65,9 +59,8 @@
           echo "  Node.js: $(node --version) | npm: $(npm --version)"
           echo "  Python:  $(python3 --version)"
           echo ""
-          echo "  Run 'dashboard-test' to:"
-          echo "    1. Build the dashboard frontend (Tailwind + daisyUI)"
-          echo "    2. Serve the full static frontend and CGI backend locally"
+          echo "  Run 'dashboard-build' to compile the dashboard (-> modules/dash/frontend/dist)."
+          echo "  The API (/api/*, /v1/*) lives on the host only - deploy and open it there."
           echo "============================================================"
         '';
       };

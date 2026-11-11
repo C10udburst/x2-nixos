@@ -144,7 +144,7 @@ in {
   device = "gpu";
   serviceName = "gufo-${modelId}.service";
   type = "gufo";
-  inherit remappedModel description sessions;
+  inherit remappedModel description sessions context;
   url = "http://127.0.0.1:${toString port}";
 
   systemdService = {

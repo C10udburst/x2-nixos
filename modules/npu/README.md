@@ -61,17 +61,18 @@ gateway switcher (`modules/dash/switcher.sh`) owns routing, remapping and the ca
 "llama-3.2-1b-npu" = mkNpuModel {
   modelId = "llama-3.2-1b-npu";
   description = "Llama 3.2 1B Instruct int4 on the XDNA 2 NPU (~2 W, off the GPU)";
-  modelPath = "llama-3.2-1b-npu";
   remappedModel = "Llama-3.2-1B-Instruct_rai_1.9.0_npu";
   kind = "genai";
   port = 8083;
+  context = 8192; # declared window: exported as NPU_CONTEXT_LENGTH, shown by /v1/models
 };
 ```
 
 `kind` selects the runner (`genai` | `embeddings` | `asr` | `image-gen`) and the advertised
-capabilities; `modelPath` is resolved against `services.npu.modelsDir` and checked in
+capabilities; the weights directory is `services.npu.modelsDir/<modelId>`, checked in
 `ExecStartPre`, so weights that are not in place fail in the journal with the missing path
-instead of leaving the gateway on a half-open connection.
+instead of leaving the gateway on a half-open connection. `context` is optional: without it
+the runner keeps whatever `genai_config.json` declares.
 
 ## Status: LLMs run on the NPU (with `services.npu.xrtDriver`), embeddings still do not
 
@@ -122,5 +123,5 @@ still open). `libvitis_ai_custom_opset.so` only exports `com.ryzenai:LayerNorm` 
 `com.ryzenai:NPU`, so it is not a missing-library problem. The runner does fix the artifact's
 `metadata_int8` schema drift (`scale_f` → `value`) for the files that do load.
 
-`modules/models.nix` registers `llama-3.2-1b-npu` (dashboard, `/v1/*` routing, per-domain
-lock) and keeps the embeddings entry commented out with the reason above.
+`models/npu.nix` registers `llama-3.2-1b-npu` (dashboard, `/v1/*` routing, per-domain lock)
+and keeps the embeddings entry commented out with the reason above.

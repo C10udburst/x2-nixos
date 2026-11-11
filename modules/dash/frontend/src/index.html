@@ -118,6 +118,52 @@
         <h2 class="text-lg font-bold">Configured models</h2>
         <p class="text-xs opacity-60">Automatic hot-swap on inference request</p>
       </div>
+
+      <!-- Registry filters. Purely client side: /v1/models is fetched once and the grid is
+           painted from whatever subset passes these controls. -->
+      <div class="card card-border bg-base-200 shadow-sm">
+        <div class="card-body flex-row flex-wrap items-center gap-2 p-3">
+          <input id="filter-search" type="search" class="input input-sm w-60 font-mono" spellcheck="false"
+            placeholder="search name / description" aria-label="Search the model registry" />
+
+          <!-- Engine and session-count multiselects: option lists are built from the registry -->
+          <div id="filter-backend"></div>
+          <div id="filter-sessions"></div>
+
+          <div class="dropdown dropdown-bottom">
+            <div tabindex="0" role="button" class="btn btn-sm btn-ghost gap-2 border border-base-300 font-mono"
+              title="Filter by declared context window">
+              <span class="opacity-60">Context</span>
+              <span class="badge badge-sm badge-neutral" id="filter-context-label">—</span>
+            </div>
+            <div tabindex="0"
+              class="dropdown-content z-10 flex w-72 flex-col gap-3 rounded-box border border-base-300 bg-base-200 p-4 shadow-lg">
+              <div class="flex items-center justify-between font-mono text-xs">
+                <span id="filter-context-min">—</span>
+                <span id="filter-context-max">—</span>
+              </div>
+              <!-- Two stacked native ranges: min on the left handle, max on the right one -->
+              <div class="dual-range" id="filter-context-range">
+                <div class="dual-range-track"></div>
+                <div class="dual-range-fill"></div>
+                <input type="range" min="0" max="100" step="1" value="0" data-range="min"
+                  aria-label="Minimum context length" />
+                <input type="range" min="0" max="100" step="1" value="100" data-range="max"
+                  aria-label="Maximum context length" />
+              </div>
+              <p class="text-[11px] leading-tight opacity-50">
+                Declared window per session, log scale. Entries without a declared window stay
+                visible only while the range is untouched.
+              </p>
+            </div>
+          </div>
+
+          <div class="divider divider-horizontal mx-0"></div>
+          <button id="btn-clear-filters" class="btn btn-ghost btn-sm" type="button" hidden>Clear filters</button>
+          <p id="models-count" class="ms-auto font-mono text-xs opacity-50"></p>
+        </div>
+      </div>
+
       <div id="models-list" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <p class="text-sm opacity-60">Loading model registry…</p>
       </div>

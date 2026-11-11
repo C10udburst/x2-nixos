@@ -9,3 +9,92 @@
 @source "../index.html";
 @source "../reserve.html";
 @source "../js";
+
+/* Dual-thumb range slider (the context-length filter popout).
+   Two native <input type=range> stacked in one box: the container draws the track and the
+   selected segment, the inputs stay transparent and hand only their thumbs to the pointer.
+   `--dual-thumb` must match THUMB_PX in js/modelFilters.js - a thumb centre travels
+   (width - thumb) px and that is what the highlighted segment is aligned to. */
+.dual-range {
+  --dual-thumb: 16px;
+  --dual-track: 6px;
+  position: relative;
+  block-size: calc(var(--dual-thumb) + 4px);
+  color: var(--color-base-content);
+}
+
+.dual-range-track,
+.dual-range-fill {
+  position: absolute;
+  inset-block-start: 50%;
+  translate: 0 -50%;
+  block-size: var(--dual-track);
+  border-radius: var(--radius-selector, 9999px);
+}
+
+.dual-range-track {
+  inset-inline: 0;
+  background: color-mix(in oklab, currentColor 15%, transparent);
+}
+
+.dual-range-fill {
+  background: var(--color-primary);
+}
+
+.dual-range input[type="range"] {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 50%;
+  translate: 0 -50%;
+  inline-size: 100%;
+  block-size: var(--dual-thumb);
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: ew-resize;
+  /* Only the thumbs take input: otherwise the upper input swallows the lower one's handle. */
+  pointer-events: none;
+}
+
+.dual-range input[type="range"]:focus {
+  outline: none;
+}
+
+.dual-range input[type="range"]::-webkit-slider-runnable-track {
+  block-size: var(--dual-thumb);
+  background: transparent;
+  border: none;
+}
+
+.dual-range input[type="range"]::-moz-range-track {
+  block-size: var(--dual-thumb);
+  background: transparent;
+  border: none;
+}
+
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  box-sizing: border-box;
+  inline-size: var(--dual-thumb);
+  block-size: var(--dual-thumb);
+  border: 2px solid var(--color-base-200);
+  border-radius: var(--radius-selector, 9999px);
+  background: var(--color-primary);
+}
+
+.dual-range input[type="range"]::-moz-range-thumb {
+  pointer-events: auto;
+  box-sizing: border-box;
+  inline-size: var(--dual-thumb);
+  block-size: var(--dual-thumb);
+  border: 2px solid var(--color-base-200);
+  border-radius: var(--radius-selector, 9999px);
+  background: var(--color-primary);
+}
+
+.dual-range input[type="range"]:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}

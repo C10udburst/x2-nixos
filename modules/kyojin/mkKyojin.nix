@@ -157,7 +157,7 @@ in {
   device = "gpu";
   serviceName = "kyojin-${modelId}.service";
   type = "kyojin";
-  inherit remappedModel description sessions;
+  inherit remappedModel description sessions context;
   url = "http://127.0.0.1:${toString port}";
 
   systemdService = {

@@ -11,6 +11,10 @@
   # Dashboard / /v1/models discovery tags only; the switcher ignores them entirely.
   capabilities ? null,
   sessions ? 1,
+  # Declared context window (tokens). `null` leaves it to the artifact's
+  # genai_config.json; a number is exported as NPU_CONTEXT_LENGTH *and* reported to the
+  # dashboard, which filters models on it.
+  context ? null,
   modelsDir ? (config.services.npu.modelsDir or "/srv/models"),
   extraEnv ? { },
 }:
@@ -49,6 +53,12 @@ let
 
     export NPU_MODEL_ID="${remappedModel}"
 
+    ${lib.optionalString (context != null) ''
+      # The declared window is what the runner uses (and what /v1/models reports); an
+      # externally exported NPU_CONTEXT_LENGTH still wins, so hand runs stay tunable.
+      export NPU_CONTEXT_LENGTH="''${NPU_CONTEXT_LENGTH:-${toString context}}"
+    ''}
+
     ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") extraEnv)}
 
     exec "${npuCfg.pythonPackage}/bin/python3" "${npuCfg.runnerSrc}/${runnerFile}" \
@@ -62,7 +72,7 @@ in
   device = "npu";
   serviceName = "npu-${modelId}.service";
   type = "npu-${kind}";
-  inherit remappedModel description sessions;
+  inherit remappedModel description sessions context;
   url = "http://127.0.0.1:${toString port}";
   modelDir = toString modelDir;
   capabilities = if capabilities != null then capabilities else (defaultCapabilities.${kind} or [ ]);

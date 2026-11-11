@@ -1,9 +1,13 @@
-// Dashboard entry point: polls /api/status and drives every view.
+// Dashboard entry point.
+//
+// Two feeds: the model registry is loaded once from /v1/models (static Nix config) and
+// /api/status is polled for telemetry plus the active workload of each domain.
 
-import { fetchStatus, stopWorkloads, switchModel } from "./api.js";
+import { fetchModels, fetchStatus, stopWorkloads, switchModel } from "./api.js";
 import { METRICS, initCharts, pushMetric, setMetricSub } from "./charts.js";
 import { clearNotify, initNotify, notify } from "./notify.js";
 import { clearPlaygroundTargetPick, initPlayground, setPlaygroundTarget } from "./playground.js";
+import { initModelFilters, renderModelFilters, syncFilterOptions } from "./modelFilters.js";
 import { initModels, renderModels } from "./models.js";
 import { initServices, renderServices } from "./services.js";
 import { findModel, modelDevice, POLL_INTERVAL_MS, state } from "./state.js";
@@ -31,7 +35,6 @@ function applyStatus(data) {
     state.active[modelDevice(data.active_model)] = data.active_model;
   }
 
-  state.models = data.models ?? [];
   state.services = data.services ?? [];
 
   const { points, subs } = readTelemetry(data);
@@ -48,7 +51,25 @@ function applyStatus(data) {
   setPlaygroundTarget();
 }
 
+// One fetch per page load. Until it lands, every poll retries it (nginx serves the file
+// itself, so a failure here means the gateway is down - the same retry path as /api/status).
+async function loadModels() {
+  try {
+    state.models = await fetchModels();
+    state.modelsLoaded = true;
+  } catch {
+    state.models = [];
+    return false;
+  }
+  syncFilterOptions(); // derives the engine / session / context-window filter options
+  renderModelFilters();
+  renderModels();
+  setPlaygroundTarget();
+  return true;
+}
+
 async function refresh() {
+  if (!state.modelsLoaded) await loadModels();
   try {
     applyStatus(await fetchStatus());
     state.online = true;
@@ -113,6 +134,7 @@ function boot() {
   initNotify();
   initServices();
   initModels(handleSwitch);
+  initModelFilters(renderModels); // a filter change repaints the grid, nothing else
   initWorkload(handleUnload);
   initPlayground();
   renderWorkload();
