@@ -86,7 +86,10 @@ in
         lib.types.submodule {
           options = {
             device = lib.mkOption {
-              type = lib.types.enum [ "gpu" "npu" ];
+              type = lib.types.enum [
+                "gpu"
+                "npu"
+              ];
               default = "gpu";
               description = "Hardware acceleration domain: 'gpu' (RDNA 3.5) or 'npu' (Ryzen AI XDNA 2).";
             };
@@ -145,7 +148,12 @@ in
 
   config = {
     _module.args = {
-      inherit mkGufo mkLlamaCpp mkKyojin mkNpuModel;
+      inherit
+        mkGufo
+        mkLlamaCpp
+        mkKyojin
+        mkNpuModel
+        ;
     };
 
     # Instantiate model systemd services with mutual Conflicts.
@@ -181,7 +189,7 @@ in
         modelPath = "qwen3.8-flash-next/UD-Q4_K_XL";
         mmprojPath = "qwen3.8-flash-next/mmproj-BF16.gguf";
         mtpModelPath = "qwen3.8-flash-next/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf";
-        context = 262144;
+        context = 524288;
         sessions = 2;
       };
 
@@ -253,7 +261,7 @@ in
         draftTokens = 6;
         mtpModelPath = "qwen3.8-flash-next-uncensored/mtp/Qwen3.8-Flash-CIRU-STRIX-Orca-MTP-Q8_0.gguf";
         context = 262144;
-        sessions = 1;
+        sessions = 2;
       };
 
       # 7. Liquid AI LFM2.5-8B-A1B (hybrid conv/attention MoE, 1.5B active params)
@@ -406,6 +414,7 @@ in
           "off"
         ];
       };
-    } // lib.optionalAttrs npuEnabled.enable npuModels;
+    }
+    // lib.optionalAttrs npuEnabled.enable npuModels;
   };
 }
