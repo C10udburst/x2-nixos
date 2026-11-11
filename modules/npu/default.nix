@@ -108,7 +108,7 @@ in
         after = [ "systemd-udev-settle.service" ];
         wants = [ "systemd-udev-settle.service" ];
         wantedBy = [ "multi-user.target" ];
-        inherit (cfg) runtimeEnv;
+        environment = cfg.runtimeEnv;
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
