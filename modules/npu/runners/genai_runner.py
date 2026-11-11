@@ -61,28 +61,29 @@ class ChatRunner:
 
         self.model = og.Model(model_dir)
         self.tokenizer = og.Tokenizer(self.model)
-        self.stream_decoder = None
-        if hasattr(og, "TokenizerStream"):
-            try:
-                self.stream_decoder = og.TokenizerStream(self.model)
-            except Exception:
-                self.stream_decoder = None
+        # Incremental decoder class; a fresh instance is created per run (see _decoder).
+        self.stream_cls = og.TokenizerStream if hasattr(og, "TokenizerStream") else None
 
     # ------------------------------------------------------------------ chat template
     def render(self, messages, add_generation_prompt=True):
-        """Prefer the engine's own template handling (it knows the tokenizer's specials)."""
-        try:
-            rendered = self.tokenizer.apply_chat_template(
-                messages, add_generation_prompt=add_generation_prompt
-            )
+        """Prefer the engine's own template handling (it knows the tokenizer's specials).
+
+        Ryzen AI 1.9.0's binding takes the conversation as a JSON string
+        (`apply_chat_template(messages: str, *, template_str, tools,
+        add_generation_prompt)`); older onnxruntime-genai builds take a Python list. Try
+        the JSON form first, then the list, then render chat_template.jinja ourselves.
+        """
+        for payload in (json.dumps(messages), messages):
+            try:
+                rendered = self.tokenizer.apply_chat_template(
+                    payload, add_generation_prompt=add_generation_prompt
+                )
+            except TypeError:
+                continue
+            except Exception as exc:
+                raise ApiError(f"apply_chat_template failed: {exc}", 500, "server_error")
             if rendered is not None:
                 return rendered
-        except TypeError:
-            rendered = self.tokenizer.apply_chat_template(messages)
-            if rendered is not None:
-                return rendered
-        except Exception as exc:
-            raise ApiError(f"apply_chat_template failed: {exc}", 500, "server_error")
 
         # Fallback: render the repo's chat_template.jinja ourselves.
         template_path = os.path.join(self.model_dir, "chat_template.jinja")
@@ -119,9 +120,9 @@ class ChatRunner:
     def search_options(self, data):
         """OpenAI sampling fields -> OGA search options.
 
-        OGA's `max_length` is the whole window (prompt + generation), so the requested
-        completion cap is expressed with `max_new_tokens` when the wheel supports it and
-        the context ceiling is kept as `max_length` either way.
+        Only the sampling knobs live here. OGA 0.18 has no `max_new_tokens`; its
+        `max_length` is the whole window, so the completion cap is turned into a per-request
+        `max_length = len(prompt) + cap` in `_generator()`.
         """
         requested = data.get("max_tokens") or data.get("max_new_tokens") or self.max_new_tokens
         try:
@@ -130,7 +131,7 @@ class ChatRunner:
             raise ApiError("max_tokens must be an integer")
 
         do_sample = bool(data.get("do_sample", self.defaults["do_sample"]))
-        options = {"max_new_tokens": new_cap, "max_length": self.context_length}
+        options = {}
         if do_sample:
             options["temperature"] = float(data.get("temperature", self.defaults["temperature"]))
             options["top_p"] = float(data.get("top_p", self.defaults["top_p"]))
@@ -188,45 +189,63 @@ class ChatRunner:
         )
 
     # --------------------------------------------------------------- generation cores
-    def _generator(self, prompt, options):
-        params = self.og.GeneratorParams(self.model)
-        try:
-            params.set_search_options(**options)
-        except Exception:
-            # Older wheels reject max_new_tokens; fall back to the window cap alone.
-            params.set_search_options(
-                **{k: v for k, v in options.items() if k != "max_new_tokens"}
-            )
-        params.input_ids = prompt
-        return self.og.Generator(self.model, params)
+    def _generator(self, prompt, options, cap):
+        """Seed a generation session and return (generator, prompt_tokens).
 
-    def _decode(self, indices):
-        if self.stream_decoder is not None:
-            return self.stream_decoder.decode(indices)
+        OGA 0.18 dropped the `params.input_ids` attribute: the sequence is seeded with
+        `Generator.append_tokens()`, and the window has to include the prompt because
+        `max_length` counts prompt + generation together.
+        """
+        ids = self.tokenizer.encode(prompt)
+        params = self.og.GeneratorParams(self.model)
+        params.set_search_options(
+            **{**options, "max_length": min(self.context_length, len(ids) + cap)}
+        )
+        gen = self.og.Generator(self.model, params)
+        gen.append_tokens(ids)
+        return gen, len(ids)
+
+    def _decoder(self):
+        """A fresh TokenizerStream per run: it accumulates state, so sharing one between
+        requests would leak the previous sequence into the next one."""
+        if self.stream_cls is not None:
+            try:
+                return self.stream_cls(self.model)
+            except Exception:
+                return None
+        return None
+
+    def _decode(self, decoder, indices):
+        if decoder is not None:
+            return decoder.decode(indices)
         return self.tokenizer.decode(indices)
+
+    def _decode_sequence(self, gen, prompt_tokens):
+        """Decode the finished sequence in a single call.
+
+        Streaming needs the incremental decoder, but for a complete answer decoding token by
+        token splits multi-byte UTF-8 characters and leaves U+FFFD at the end - so the
+        non-streaming path decodes the whole new-suffix once.
+        """
+        try:
+            sequence = list(gen.get_sequence(0))
+        except Exception:
+            return ""
+        return self.tokenizer.decode(sequence[prompt_tokens:])
 
     def _complete(self, data, prompt, options, cap, completions=False):
         created = int(time.time())
         model = data.get("model") or self.alias
-        limit = cap + 1  # safety net; the engine enforces max_new_tokens itself
-        pieces = []
+        limit = cap + 1  # safety net; the engine enforces the max_length window itself
         new_tokens = 0
         prompt_tokens = 0
 
         with SESSION_LOCK:
-            gen = self._generator(prompt, options)
-            try:
-                prompt_tokens = len(list(gen.get_input_ids()))
-            except Exception:
-                prompt_tokens = 0
+            gen, prompt_tokens = self._generator(prompt, options, cap)
             while not gen.is_done() and new_tokens < limit:
-                gen.generate_next()
+                gen.generate_next_token()
                 new_tokens += 1
-                try:
-                    pieces.append(self._decode(gen.get_output_indices()))
-                except Exception:
-                    break
-            text = "".join(pieces)
+            text = self._decode_sequence(gen, prompt_tokens)
             stopped = new_tokens < limit  # loop ended because the engine reported is_done()
 
         text = text.replace("</s>", "").rstrip()
@@ -284,12 +303,13 @@ class ChatRunner:
             yield sse_event({**base, "choices": [{"index": 0, "delta": first_delta, "finish_reason": None}]})
             emitted = 0
             with SESSION_LOCK:
-                gen = self._generator(prompt, options)
+                decoder = self._decoder()
+                gen, _ = self._generator(prompt, options, cap)
                 while not gen.is_done() and emitted < limit:
-                    gen.generate_next()
+                    gen.generate_next_token()
                     emitted += 1
                     try:
-                        piece = self._decode(gen.get_output_indices())
+                        piece = self._decode(decoder, gen.get_next_tokens())
                     except Exception:
                         break
                     if piece:

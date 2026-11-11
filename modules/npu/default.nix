@@ -36,6 +36,12 @@ let
     PYTHONPATH = ryzenAi.pythonPath;
     RYZENAI_EP_PATH = ryzenAi.runtimeEnv.RYZENAI_EP_PATH;
   };
+
+  # AMD's out-of-tree amdxdna, built against the kernel this system actually boots.
+  amdxdnaDriver = pkgs.callPackage ./packages/amdxdna-driver.nix {
+    kernel = config.boot.kernelPackages.kernel;
+    inherit (ryzenAi) amdxdnaSource xrt;
+  };
 in
 {
   # NOTE: ./mkNpuModel.nix is *not* a module - it is a plain factory called from
@@ -76,6 +82,19 @@ in
       '';
     };
 
+    xrtDriver = lib.mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Build and load AMD's out-of-tree `amdxdna` driver (shipped inside XRT) instead of the
+        in-tree kernel module. Mainline's driver is 0.10.0-era and lacks the user-buffer and
+        descriptor-page-table paths AMD's Ryzen AI userspace needs, so LLM session creation
+        fails with `DRM_IOCTL_AMDXDNA_CREATE_BO err=-14`. The module keeps the same name and
+        lands in `updates/`, which depmod prefers over the in-tree `kernel/` copy.
+        Requires a reboot (or rmmod/modprobe) to take effect.
+      '';
+    };
+
     modelsDir = lib.mkOption {
       type = types.str;
       default = "/srv/models";
@@ -100,6 +119,13 @@ in
   };
 
   config = lib.mkMerge [
+    # Out-of-tree NPU driver: shadows the in-tree amdxdna for every consumer, including the
+    # GPU-side workloads (they do not touch /dev/accel, so this is NPU-only in practice).
+    (lib.mkIf cfg.xrtDriver {
+      boot.extraModulePackages = [ amdxdnaDriver ];
+      boot.kernelModules = [ "amdxdna" ];
+    })
+
     (lib.mkIf cfg.enable {
       # The wheel environment is validated at build time, so a start-up failure here means the
       # host itself is the problem (missing device node, wrong group).

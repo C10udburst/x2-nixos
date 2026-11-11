@@ -29,6 +29,11 @@
   # iGPU (per-domain Rule 1). See modules/npu/README.md for what AMD still blocks.
   services.npu.enable = true;
 
+  # Mainline's amdxdna (0.10.0-era) cannot create the buffer objects AMD's Ryzen AI 1.9.0
+  # userspace asks for (DRM_IOCTL_AMDXDNA_CREATE_BO err=-14), so build the driver AMD ships
+  # inside XRT. Takes effect on the next reboot; `updates/amdxdna.ko` shadows the in-tree one.
+  services.npu.xrtDriver = true;
+
   nixpkgs.overlays = [
     (final: prev: {
       pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [

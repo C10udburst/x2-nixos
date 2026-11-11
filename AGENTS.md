@@ -275,6 +275,7 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     │   ├── mkNpuModel.nix      # mkNpuModel helper implementing strict model contract
     │   ├── packages/
     │   │   ├── ryzen-ai.nix    # AMD Ryzen AI 1.9.0 runtime as derivations (hash-pinned)
+    │   │   ├── amdxdna-driver.nix  # XRT's out-of-tree amdxdna.ko (services.npu.xrtDriver)
     │   │   └── strip-execstack.py  # clears PT_GNU_STACK X (kernel >= 6.6 rejects on dlopen)
     │   └── runners/
     │       ├── npu_http.py     # shared /health + SSE streaming + one-session lock
@@ -292,25 +293,26 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
 
 ---
 
-## 7. Known AMD-side blockers (NPU domain)
+## 7. Driver and artifact constraints (NPU domain)
 
-Validated on this host: the packaged runtime registers `VitisAIExecutionProvider`, AMD's own
-quicktest CNN executes on the NPU (`NPU kernel time: 3234 us`) and returns CPU-identical
-numerics. Two artifacts published by AMD do not work yet, so only the paths that do work are
-exposed:
+Validated on this host (`llm`, kernel 7.2.9): LLM generation runs on the NPU (`59.3 tok/s` on
+Llama-3.2-1B int4), AMD's quicktest CNN executes on the NPU (`NPU kernel time: 3234 us`) with
+CPU-identical numerics, and the packaged runtime registers `VitisAIExecutionProvider`.
 
-1. **LLM/genai session init** - every LLM session ends in
+1. **LLM/genai needs AMD's out-of-tree driver - solved by `services.npu.xrtDriver`.** With
+   mainline's `amdxdna` every LLM session died in
    `DRM_IOCTL_AMDXDNA_CREATE_BO failed (err=-14: Bad address)` /
-   `amdxdna_get_ubuf: Failed to pin pages ret -14` after ~1 s of real NPU work. The in-tree
-   `amdxdna` driver on kernel 7.2.9 is older than what the 1.9.0 userspace BO path expects.
-   XRT ships the out-of-tree driver source, exposed as `ryzenAi.amdxdnaSource` for a DKMS
-   build; that is the fix, not a usage error (reproduced with `load_as_static`, graph batching
-   and the tokenizer removed).
+   `amdxdna_get_ubuf: Failed to pin pages ret -14`: the in-tree driver is 0.10.0-era and has no
+   `amdxdna_ubuf_get_pages`, no `amdxdna_dpt.c` and no `npu6_regs`, while the Ryzen AI userspace
+   is 2.2x-era. AMD develops the driver out-of-tree (`amd/xdna-driver`) and ships it inside XRT;
+   `packages/amdxdna-driver.nix` builds exactly that tree (plus XRT's `configure_kernel.sh`
+   feature probes) for `boot.kernelPackages` and installs `updates/amdxdna.ko`, which depmod
+   prefers over the in-tree module. **A plain `nix flake update` cannot fix the gap** - there is
+   no synced mainline release to move to. Enabling the option needs a reboot (or
+   `rmmod amdxdna && insmod …/updates/amdxdna.ko`) to take effect.
 2. **EmbeddingGemma NPU artifact** - `com.ryzenai:CastAvx` is referenced by the only published
    artifact and registered by no 1.8/1.9 runtime ([amd/RyzenAI-SW#387](https://github.com/amd/RyzenAI-SW/issues/387)).
    `runners/embeddings_runner.py` is code-complete (including the artifact's `metadata_int8`
-   schema drift) and the registry entry is commented out with this reason.
+   schema drift) and the registry entry stays commented out with this reason.
 
-`llama-3.2-1b-npu` stays registered either way: it exercises the whole NPU domain (dashboard,
-`/v1/*` routing, per-domain lock) and fails with AMD's own message rather than hiding the
-problem. Full notes: `modules/npu/README.md`.
+Full notes: `modules/npu/README.md`.

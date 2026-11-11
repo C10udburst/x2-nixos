@@ -18,6 +18,8 @@ never evict across domains.
 default.nix              services.npu: user, device, runtime environment, stack self-check
 mkNpuModel.nix           per-model registry entry -> one runner process + one systemd unit
 packages/ryzen-ai.nix    the AMD runtime as derivations (fetched by hash, fixed, smoke-tested)
+packages/amdxdna-driver.nix  AMD's out-of-tree NPU driver from XRT, for kernels whose
+                             in-tree amdxdna lags the userspace (services.npu.xrtDriver)
 packages/strip-execstack.py  clears PT_GNU_STACK X (kernel >= 6.6 rejects it on dlopen)
 runners/npu_http.py      minimal /health + modality routes, SSE streaming, one session/lock
 runners/genai_runner.py  onnxruntime-genai model -> /v1/chat/completions, /v1/completions
@@ -71,9 +73,9 @@ capabilities; `modelPath` is resolved against `services.npu.modelsDir` and check
 `ExecStartPre`, so weights that are not in place fail in the journal with the missing path
 instead of leaving the gateway on a half-open connection.
 
-## Status: the stack is validated, the two MVP artifacts are not shippable yet
+## Status: LLMs run on the NPU (with `services.npu.xrtDriver`), embeddings still do not
 
-Verified **on this machine** (`llm`, kernel 7.2.9, driver `amdxdna`, `/dev/accel/accel0`):
+Verified **on this machine** (`llm`, kernel 7.2.9, `/dev/accel/accel0`):
 
 * ORT 1.30 accepts `providers=["VitisAIExecutionProvider"]`, reports
   `['VitisAIExecutionProvider', 'CPUExecutionProvider']`, and honours `provider_options`
@@ -84,25 +86,41 @@ Verified **on this machine** (`llm`, kernel 7.2.9, driver `amdxdna`, `/dev/accel
 * Execstack and all missing sonames are handled by the derivations, so this needs no manual
   environment fiddling.
 
-Two AMD-side blockers, each isolated so the other still works:
+```
+curl :8199/v1/chat/completions  {"messages":[…"Name three cities in Japan"…]}
+  -> "1. Tokyo  2. Osaka  3. Fukuoka"   finish_reason=stop, 45+21 tokens
+measured decode: 59.3 tok/s (Llama-3.2-1B int4, og.Generator loop, NPU)
+```
 
-1. **LLM path (`genai_runner.py`) — needs the newer amdxdna driver.** Every LLM session
-   (ONNX Runtime GenAI *and* plain ORT on AMD's Llama-3.2-1B NPU artifact) fails identically
-   inside the driver:
-   `DRM_IOCTL_AMDXDNA_CREATE_BO ... failed (err=-14: Bad address)` /
-   `amdxdna_get_ubuf: Failed to pin pages ret -14`, after ~980 ms of real NPU work.
-   `io_uring` (used by the 1.9.0 BO path) is enabled here, and the failure reproduces with
-   `load_as_static`, graph batching, and the tokenizer stripped out, so it is not a usage
-   error. XRT ships the out-of-tree driver source (`services.npu` exposes it as
-   `ryzenAi.amdxdnaSource`); installing it via DKMS is the fix (AGENTS.md section 7).
-2. **Embeddings path (`embeddings_runner.py`) — AMD artifact cannot be loaded by any runtime.**
-   `amd/embeddinggemma-300m_npu_rai_1.8.0_npu_4K` references `com.ryzenai:CastAvx`, which no
-   1.8.0/1.9.0 runtime registers (same class as open
-   [amd/RyzenAI-SW#387](https://github.com/amd/RyzenAI-SW/issues/387), filed against 1.8.0
-   and still open). `libvitis_ai_custom_opset.so` only exports `com.ryzenai:LayerNorm` /
-   `com.ryzenai:NPU`, so it is not a missing-library problem. The runner also fixes the
-   artifact's `metadata_int8` schema drift (`scale_f` → `value`) for the files that do load.
+### The LLM path needed AMD's out-of-tree driver (fixed)
 
-Neither is wired into the gateway until it works: `modules/models.nix` registers
-`llama-3.2-1b-npu` (so the NPU domain is exercised end to end: dashboard, `/v1/*` routing,
-per-domain lock) and keeps the embeddings entry commented out with this reason.
+With mainline's `amdxdna` every LLM session (ONNX Runtime GenAI *and* plain ORT on AMD's
+Llama-3.2-1B NPU artifact) failed identically inside the driver, after ~1 s of real NPU work:
+`DRM_IOCTL_AMDXDNA_CREATE_BO … (err=-14: Bad address)` /
+`amdxdna_get_ubuf: Failed to pin pages ret -14`.
+
+That was a driver/userspace version gap, not a usage error (reproduced with `load_as_static`,
+graph batching, the tokenizer removed, and with two different artifacts). Mainline's driver is
+0.10.0-era and has no `amdxdna_ubuf_get_pages`, no `amdxdna_dpt.c` and no `npu6_regs`; AMD
+develops the driver out-of-tree ([amd/xdna-driver](https://github.com/amd/xdna-driver), 2.2x)
+and ships it inside XRT as a DKMS package. `nix flake update` therefore cannot fix it — there
+is no synced mainline release to update to.
+
+`services.npu.xrtDriver = true;` builds that tree for the running kernel
+(`packages/amdxdna-driver.nix`) and installs it as `updates/amdxdna.ko`, which depmod prefers
+over the in-tree copy — no nixpkgs kernel patching, no DKMS daemon, nothing outside the store.
+It took effect live here with `rmmod amdxdna && insmod …/updates/amdxdna.ko` (0.10.0 → 0.16.0,
+`version: 2.26.260102.59.release`); a reboot is what makes it permanent.
+
+### Embeddings still need an AMD fix
+
+`runners/embeddings_runner.py` is code-complete, but the only artifact AMD publishes for it,
+`amd/embeddinggemma-300m_npu_rai_1.8.0_npu_4K`, references `com.ryzenai:CastAvx`, which no
+1.8.0/1.9.0 runtime registers (same class as open
+[amd/RyzenAI-SW#387](https://github.com/amd/RyzenAI-SW/issues/387), filed against 1.8.0 and
+still open). `libvitis_ai_custom_opset.so` only exports `com.ryzenai:LayerNorm` /
+`com.ryzenai:NPU`, so it is not a missing-library problem. The runner does fix the artifact's
+`metadata_int8` schema drift (`scale_f` → `value`) for the files that do load.
+
+`modules/models.nix` registers `llama-3.2-1b-npu` (dashboard, `/v1/*` routing, per-domain
+lock) and keeps the embeddings entry commented out with the reason above.
