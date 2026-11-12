@@ -25,6 +25,7 @@ let
   runners = {
     genai = "genai_runner.py";
     embeddings = "embeddings_runner.py";
+    asr = "stt_runner.py";
   };
 
   runnerFile =

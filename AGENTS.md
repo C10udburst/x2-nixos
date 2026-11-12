@@ -40,7 +40,7 @@ digraph EVO_X2 {
 ### Key Principles:
 1. **Single Workload In Memory Per Domain (Rule 1)**: The 128 GB unified memory pool is shared between Zen 5 CPU cores, the RDNA 3.5 iGPU and the XDNA 2 NPU. To eliminate OOM errors and VRAM thrashing, **exactly one** memory-intensive service is active per *domain*: the GPU domain holds one of (an active LLM, the Immich ML engine, ComfyUI) and the NPU domain holds one `npu-*` runner. The two domains may be loaded simultaneously - a 2 W NPU chat model never displaces a 300 GB GPU LLM.
 2. **Three Core Subsystems Supported**:
-   - **LLM Subsystem**: Extensible multi-model registry (`gufo`, `llama-cpp`), FastCGI streaming switcher on port 8080 (`/v1/*`), dynamic model switching.
+   - **LLM Subsystem**: Extensible multi-model registry (`gufo`, `llama-cpp`, `kyojin`, `npu-*`), a resident Rust router daemon on port 8080 (`/v1/*`) that performs model remapping, per-domain routing and dynamic model switching (falling back to the FastCGI `switcher.sh` CGI when `services.switcher.enable = false`).
    - **Immich Machine Learning**: Photo ML inference on public port 3003, proxying to loopback port 3004 on demand.
    - **ComfyUI**: Generative AI studio on public port 8188, proxying to loopback port 8189 on demand, packaged declaratively via `github:utensils/comfyui-nix` with pre-built ROCm support (no git clones).
 3. **0 MB RAM Footprint on Boot**: Standalone workloads like Immich and ComfyUI run via systemd socket activation. On boot, only listening sockets exist in kernel memory (~0 MB RAM). Heavy backend services only start upon incoming connections.
@@ -208,7 +208,31 @@ The gateway runs on **port 8080**:
 - **`/assets/*`**: Content-hashed JS/CSS bundles, served with `Cache-Control: public, max-age=31536000, immutable`; `index.html` is served with `no-cache` so a rebuild is picked up immediately.
 - **`/api/status`**: Dynamic API returning system memory, GPU VRAM & GTT, NPU busy/state, the active workload **of each domain**, and status for all defined services (Gateway, Immich ML, ComfyUI). It deliberately carries **no model list** - that is static config and belongs to `/v1/models`.
 - **`/v1/models`** (and `/models`): the model registry as a classic OpenAI list, generated at Nix eval time and served by nginx straight from a file (`alias`), so it costs nothing and answers even while every workload is cold.
-- **`/v1/*`**: Hot-path Bash + `jq` switcher (`modules/dash/switcher.sh`) with request model remapping, per-domain routing and automatic workload unloading.
+- **`/v1/*`**: Routed by the **Rust daemon** (`modules/switcher/`) - see §8. nginx `proxy_pass`es to its Unix socket; the older Bash + `jq` FastCGI switcher (`modules/dash/switcher.sh`) remains available as a fallback.
+
+### Router daemon (`modules/switcher/`)
+
+One resident process replaces eight preforked fastcgiwrap workers plus a `bash`+`jq`+`curl` fork
+cascade per request. See `modules/switcher/README.md` for the design rationale; the contract in
+brief:
+
+| aspect | behaviour |
+| --- | --- |
+| transport | nginx `proxy_pass` -> Unix socket `/run/switcher/switcher.sock` (mode `0660`, group `gateway`); `--listen tcp:HOST:PORT` also exists for development |
+| model resolution | `?model=` query, then `X-Model` header, then the body's top-level `model` field (JSON / multipart / form-urlencoded), then the registry `@default` |
+| registry | tab-separated file generated at eval time by `modules/switcher/registry.nix` - no JSON parser in the hot path; `\`, TAB, CR, LF are escaped so no field can forge a boundary |
+| residency | reads `/run/model-lock/active_<device>`, otherwise takes `<device>.lock` via `flock(2)`, runs `stop-other-workloads <device> <unit>`, starts the unit, polls health |
+| lock order | every domain a model declares, acquired in `Device::LOCK_ORDER` (`gpu` then `npu`) - same rule as §3 |
+| body limits | `--max-body` (default 512 MiB) bounds buffering; over-limit is `413`, not OOM |
+| capability guard | a request whose route the model does not declare (e.g. `/v1/embeddings` on a chat-only model) gets `400` naming both the route and the declared set |
+| streaming | `Transfer-Encoding: chunked` is forwarded verbatim, never re-framed; SSE reaches the client incrementally. nginx keeps `proxy_buffering off` |
+| connection reuse | per-backend keep-alive pool (8 idle sockets, 20 s TTL), dropped when a workload is stopped |
+| concurrency | one thread per connection, 256 KiB stacks, `--worker-max` (default 512) admitted before spawn so overload answers `503` |
+| idle cost | blocked in `accept()`; measured **0.00 %** of one core while idle |
+
+Dependency policy: the crate has **zero** Cargo dependencies (only `std`; `flock` is hand-written
+FFI in `src/ffi.rs`). That is why `cargoHash` pins an empty vendor tree and the build never needs
+the network.
 
 ### Dual-domain API contract (`modules/dash/dash.py`)
 
@@ -289,7 +313,7 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     │   │       └── js/         # main.js + api, charts, modelFilters, models, playground,
     │   │                       # services, state, telemetry, workload
     │   ├── dash.py             # Telemetry & status Python CGI API
-    │   └── switcher.sh         # Hot-path /v1/* FastCGI switcher with remapping
+    │   └── switcher.sh         # Legacy /v1/* FastCGI switcher (fallback when the daemon is off)
     ├── gufo/
     │   ├── default.nix         # Gufo user, permissions, and tmpfiles
     │   └── mkGufo.nix          # mkGufo helper implementing strict model contract
@@ -320,6 +344,23 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     ├── network.nix             # Static IP, DNS nameservers & gateway networking
     ├── nix.nix                 # Nix daemon, flakes, GC, and nix-command options
     ├── pkgs.nix                # System utility packages
+    ├── switcher/
+    │   ├── README.md           # Router design: why a daemon, why zero dependencies
+    │   ├── Cargo.toml          # Zero-dependency crate (std only)
+    │   ├── default.nix         # rustPlatform.buildRustPackage, runs the unit tests
+    │   ├── registry.nix        # services.models -> tab-separated router registry
+    │   ├── service.nix         # systemd unit + nginx socket wiring
+    │   └── src/
+    │       ├── main.rs         # accept loop, request routing, model resolution
+    │       ├── config.rs       # CLI surface and every tunable
+    │       ├── registry.rs     # registry parser, route/capability matching, lock order
+    │       ├── scan.rs         # model-id extraction from JSON / multipart / form / query
+    │       ├── http.rs         # head parsing, framing detection, response/error writing
+    │       ├── relay.rs        # chunk-framing tracker (SSE-safe, never re-frames)
+    │       ├── stream.rs       # Unix/TCP stream abstraction and timeouts
+    │       ├── pool.rs         # per-backend keep-alive socket pool
+    │       ├── workload.rs     # locks, state files, systemctl, health probes
+    │       └── ffi.rs          # flock(2) FFI
     ├── tailscale.nix           # Tailscale mesh networking
     ├── users.nix               # User accounts & SSH keys
     └── workload-manager.nix    # Central eval-time exclusive workload manager

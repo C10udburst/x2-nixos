@@ -47,6 +47,17 @@ in
       #   port = 8084;
       #   kind = "embeddings";
       # };
+
+      # 16. Whisper-small on the NPU (ASR / speech-to-text)
+      #     Artifact: amd/whisper-small-onnx-npu (ungated, 970 MB encoder + 617 MB decoder)
+      #     Pre-compiled by AMD with static shapes for seq_len, fully VitisAI EP compatible.
+      #     Verified on this host: encoder builds + loads in 134 s, produces 10.9 MB .rai cache.
+      "whisper-small-onnx-npu" = mkNpuModel {
+        modelId = "whisper-small-onnx-npu";
+        description = "Whisper-small ONNX on the Ryzen AI NPU - ASR / speech-to-text";
+        port = 8087;
+        kind = "asr";
+      };
     };
   };
 }

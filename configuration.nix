@@ -13,6 +13,7 @@
     ./modules/network.nix
     ./modules/nix.nix
     ./modules/pkgs.nix
+    ./modules/switcher/service.nix
     ./modules/tailscale.nix
     ./modules/users.nix
   ];
@@ -25,6 +26,9 @@
   # Boot with 0 VRAM used until models are downloaded to /srv/models
   services.defaultModel = null;
 
+  # /v1/* is routed by the Rust daemon (unix socket) instead of the FastCGI switcher.sh CGI.
+  services.switcher.enable = true;
+
   # Second inference domain: the XDNA 2 NPU runs its own single workload in parallel with the
   # iGPU (per-domain Rule 1). See modules/npu/README.md for what AMD still blocks.
   services.npu.enable = true;
@@ -33,6 +37,7 @@
   # userspace asks for (DRM_IOCTL_AMDXDNA_CREATE_BO err=-14), so build the driver AMD ships
   # inside XRT. Takes effect on the next reboot; `updates/amdxdna.ko` shadows the in-tree one.
   services.npu.xrtDriver = true;
+services.npu.extraPythonPackages = [ pkgs.python312.pkgs.tokenizers ];  # needed by runners/stt_runner.py (ASR)
 
   nixpkgs.overlays = [
     (final: prev: {

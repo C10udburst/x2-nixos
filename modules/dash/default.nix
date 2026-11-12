@@ -116,7 +116,9 @@
     exec ${pkgs.python3}/bin/python3 ${./reservations.py} "$@"
   '';
 
-  # Ultra-fast Bash + jq Switcher wrapper (hot path for /v1/* inference requests)
+  # The /v1/* hot path is a long-lived Rust daemon on its own Unix socket (see
+  # modules/switcher/service.nix). When it is disabled we fall back to the historical FastCGI
+  # CGI script, so the gateway keeps working during the migration.
   switcherScript = pkgs.writeShellScript "ai-v1-switcher" ''
     export PATH="/run/wrappers/bin:${lib.makeBinPath [
       pkgs.jq
@@ -130,6 +132,40 @@
     export SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
     export STOP_OTHER_WORKLOADS="${config.services.workload-manager.stopScript}"
     exec ${pkgs.bash}/bin/bash ${./switcher.sh} "$@"
+  '';
+
+  # Where /v1/* goes: the Rust router's unix socket when enabled, else fcgiwrap.
+  useSwitcherDaemon = config.services ? switcher && config.services.switcher.enable;
+  switcherSocket =
+    if config.services ? switcher then config.services.switcher.socketPath else "/run/switcher/switcher.sock";
+
+  # One snippet, two backends. `proxy_pass` to the daemon vs `fastcgi_pass` to the CGI.
+  #
+  # Nginx variables are written with a single `$`: the nginx module interpolates `extraConfig`
+  # verbatim (`${vhost.extraConfig}`), so `$$host` would reach nginx literally and forward the
+  # text "$$host" instead of the requested host.
+  v1ProxyConfig = ''
+    proxy_pass http://unix:${switcherSocket}:;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Model "$http_x_model";
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    client_body_timeout 3600s;
+    client_max_body_size 0;
+  '';
+
+  v1FastcgiConfig = ''
+    fastcgi_pass unix:/run/fcgiwrap-gateway.sock;
+    include ${pkgs.nginx}/conf/fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME ${switcherScript};
+    fastcgi_buffering off;
+    fastcgi_read_timeout 600s;
+    fastcgi_send_timeout 600s;
+    client_body_timeout 600s;
+    client_max_body_size 0;
   '';
 in {
   options.services.gateway = {
@@ -169,8 +205,9 @@ in {
       };
     };
 
-    # Dedicated fcgiwrap instance for /v1/* inference hot path
-    services.fcgiwrap.instances.gateway = {
+    # Dedicated fcgiwrap instance for the /v1/* hot path - only needed while the Rust router is
+    # disabled, since the daemon replaces these eight preforked CGI workers.
+    services.fcgiwrap.instances.gateway = lib.mkIf (!useSwitcherDaemon) {
       process.prefork = 8;
       process.user = "gateway";
       process.group = "gateway";
@@ -265,32 +302,14 @@ in {
           '';
         };
 
-        # 5. Ultra-fast Bash + jq Model Switcher (/v1/* inference hot path)
+        # 5. Model router (/v1/* inference hot path): Rust daemon when enabled, else FastCGI
         locations."/v1/" = {
-          extraConfig = ''
-            fastcgi_pass unix:/run/fcgiwrap-gateway.sock;
-            include ${pkgs.nginx}/conf/fastcgi_params;
-            fastcgi_param SCRIPT_FILENAME ${switcherScript};
-            fastcgi_buffering off;
-            fastcgi_read_timeout 600s;
-            fastcgi_send_timeout 600s;
-            client_body_timeout 600s;
-            client_max_body_size 0;
-          '';
+          extraConfig = if useSwitcherDaemon then v1ProxyConfig else v1FastcgiConfig;
         };
 
-        # 6. Native llama.cpp /completion endpoint
+        # 6. Native llama.cpp /completion endpoint (same router, different path)
         locations."= /completion" = {
-          extraConfig = ''
-            fastcgi_pass unix:/run/fcgiwrap-gateway.sock;
-            include ${pkgs.nginx}/conf/fastcgi_params;
-            fastcgi_param SCRIPT_FILENAME ${switcherScript};
-            fastcgi_buffering off;
-            fastcgi_read_timeout 600s;
-            fastcgi_send_timeout 600s;
-            client_body_timeout 600s;
-            client_max_body_size 0;
-          '';
+          extraConfig = if useSwitcherDaemon then v1ProxyConfig else v1FastcgiConfig;
         };
       };
     };
@@ -299,6 +318,9 @@ in {
     systemd.tmpfiles.rules = [
       "d /var/lib/gateway 0755 gateway gateway - -"
     ];
+
+    # NOTE: the router runs as `gateway`, which modules/workload-manager.nix already grants
+    # passwordless sudo for `systemctl` and the stop-other-workloads script - no extra rule here.
 
     # Open firewall port
     networking.firewall.allowedTCPPorts = [cfg.port];

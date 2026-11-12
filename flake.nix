@@ -65,6 +65,15 @@
         '';
       };
 
+      # The router as a standalone package, so `nix build .#switcher` works without deploying.
+      # It is the same derivation `modules/switcher/service.nix` puts in ExecStart.
+      packages = nixpkgs.lib.genAttrs [ "x86_64-linux" ] (system: {
+        switcher = import ./modules/switcher/default.nix {
+          lib = nixpkgs.lib;
+          rustPlatform = nixpkgs.legacyPackages.${system}.rustPlatform;
+        };
+      });
+
       nixosConfigurations = {
         evo-x2 = nixpkgs.lib.nixosSystem {
           system = "x86_64-linux";
