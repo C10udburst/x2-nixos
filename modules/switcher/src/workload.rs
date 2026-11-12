@@ -276,34 +276,10 @@ impl Runner {
     }
 }
 
-/// One probe round: is this backend ready to infer?
-///
-/// A process answering on the port is *not* sufficient. llama-server binds its socket before the
-/// weights are resident and keeps replying `503 {"error":{"message":"Loading model", ...}}` for
-/// as long as it takes - which on a multi-hundred-gigabyte GGUF is minutes. Accepting any `< 500`
-/// there (the old rule, inherited from `dash.py:check_url_health`) handed the client a 503 in the
-/// middle of a load and made the caller retry from scratch.
-///
-/// So: a `< 500` counts as ready, **unless** the body says it is still loading, and a `5xx` whose
-/// body names loading also counts as "alive but not ready" - keep waiting rather than failing.
-/// Returns `Ready`, `Loading`, or `Unresponsive` so the caller can distinguish "wait longer" from
-/// "nothing is listening yet".
-#[derive(PartialEq, Debug)]
-pub enum Readiness {
-    Ready,
-    /// Something answers and says it will serve soon.
-    Loading,
-    /// Connection refused, timed out, or an unparsable reply.
-    Unresponsive,
-}
-
-/// Substrings that mean "up, but the model is not resident yet". Kept in `relay`, which owns the
-/// one other place a response is classified; matched case-insensitively against the body so a
-/// genuine 500 is never mistaken for loading.
-use crate::relay::says_loading as looks_like_loading;
-
-pub fn probe(addr: SocketAddr, paths: &[String], timeout: Duration) -> Readiness {
-    let mut saw_loading = false;
+/// One probe round: `GET <path>` on each readiness path, accepting any answer below 500
+/// (same rule as `dash.py:check_url_health`, since a backend may 404 `/health` and still be
+/// perfectly usable).
+fn probe(addr: SocketAddr, paths: &[String], timeout: Duration) -> bool {
     for path in paths {
         let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
             continue;
@@ -316,50 +292,30 @@ pub fn probe(addr: SocketAddr, paths: &[String], timeout: Duration) -> Readiness
         if stream.write_all(request.as_bytes()).is_err() {
             continue;
         }
-        // Read enough to see both the status line and a short error body. The markers live in the
-        // JSON message, which sits right after the head; 4 KiB is far more than needed and keeps
-        // a probe cheap even when it runs several times a second.
-        let mut buf = vec![0u8; 4096];
+        let mut head = [0u8; 24];
         let mut filled = 0usize;
-        loop {
-            if filled == buf.len() {
-                break;
-            }
-            match stream.read(&mut buf[filled..]) {
+        while filled < head.len() {
+            match stream.read(&mut head[filled..]) {
                 Ok(0) => break,
                 Ok(got) => filled += got,
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(_) => break,
             }
         }
-        if filled == 0 {
-            continue;
-        }
-        let response = &buf[..filled];
-        let head_line = &response[..response.iter().position(|&b| b == b'\n').unwrap_or(filled)];
         // "HTTP/1.1 404 ..." -> 404
-        let code: u16 = match std::str::from_utf8(head_line) {
+        let code: u16 = match std::str::from_utf8(&head[..filled]) {
             Ok(text) => text
                 .split_whitespace()
                 .nth(1)
-                .and_then(|c| c.parse().ok())
+                .and_then(|code| code.parse().ok())
                 .unwrap_or(999),
             Err(_) => 999,
         };
-
-        if looks_like_loading(response, &[]) {
-            saw_loading = true;
-            continue;
-        }
         if code < 500 {
-            return Readiness::Ready;
+            return true;
         }
     }
-    if saw_loading {
-        Readiness::Loading
-    } else {
-        Readiness::Unresponsive
-    }
+    false
 }
 
 /// Resolve a backend host once per use, with a literal-IP fast path (`127.0.0.1` is the only
@@ -426,17 +382,14 @@ impl Workload {
             return Ok(false);
         }
 
-        // Fail fast on weights that are simply not installed. Without this the unit starts,
-        // llama-server dies on the missing file, and `Restart=no` leaves nothing listening - the
-        // client then waits out the whole startup timeout for an answer that can never come. The
-        // registry only carries a directory when one is meaningful (NPU entries set it), so an
-        // empty value means "nothing to check".
+        // Fail fast on weights that were never downloaded, *before* spending minutes on a unit
+        // start that would only fail in the journal.
         if !entry.model_dir.is_empty() && !Path::new(&entry.model_dir).is_dir() {
             return Err(Fail::new(
-                500,
-                "server_error",
+                503,
+                "service_unavailable",
                 format!(
-                    "Model {} is not installed: {} does not exist",
+                    "model {} is not downloaded: {} is missing",
                     entry.id, entry.model_dir
                 ),
             ));
@@ -448,88 +401,34 @@ impl Workload {
         }
 
         let started_at = Instant::now();
-        // A non-zero `systemctl start` is deliberately NOT fatal here; it only becomes an error if
-        // the backend never answers either.
-        //
-        // Why: `start` blocks until systemd reports the unit active, and that can fail for reasons
-        // that have nothing to do with the model ever coming up - a job still queued from the
-        // stop-other-workloads pass above, a conflicting unit mid-teardown, or a transient D-Bus
-        // hiccup. In every one of those cases the process may still be starting, and the health
-        // probe below is the only authoritative signal. Treating the exit status as final turned
-        // those into an instant 500 while the model quietly finished loading in the background,
-        // which is why a second request to the same endpoint succeeded.
-        let start_result = if force {
-            self.runner.restart(&entry.service)
+        if force {
+            self.runner.restart(&entry.service)?;
         } else {
-            self.runner.start(&entry.service)
-        };
-        if let Err(err) = &start_result {
-            eprintln!(
-                "switcher: {} reported failure ({}); waiting for {} to answer anyway",
-                entry.service,
-                err.message,
-                entry.authority()
-            );
+            self.runner.start(&entry.service)?;
         }
 
         let addr = backend_addr(entry)?;
         let mut delay = Duration::from_millis(25);
         let deadline = Instant::now() + self.startup_timeout;
-        let mut loading_reported = false;
         loop {
-            match probe(addr, &self.health_paths, Duration::from_millis(1500)) {
-                Readiness::Ready => break,
-                Readiness::Loading => {
-                    // The client is held on this connection until the weights are resident. Say so
-                    // once, so a multi-minute load is visible in the journal without spamming it.
-                    if !loading_reported {
-                        eprintln!(
-                            "switcher: {} is loading its model, holding the request open",
-                            entry.service
-                        );
-                        loading_reported = true;
-                    }
-                }
-                Readiness::Unresponsive => {}
+            if probe(addr, &self.health_paths, Duration::from_millis(1500)) {
+                break;
             }
             if Instant::now() >= deadline {
-                // Report what actually went wrong. If systemctl said something useful, prefer it
-                // over "never became responsive", which would hide a real config error behind a
-                // timeout.
-                return Err(match start_result {
-                    Err(err) => Fail::new(
-                        500,
-                        "server_error",
-                        format!("{} failed to start: {}", entry.service, err.message),
+                return Err(Fail::new(
+                    504,
+                    "gateway_timeout",
+                    format!(
+                        "{} did not become responsive within {}s on {}",
+                        entry.service,
+                        self.startup_timeout.as_secs(),
+                        addr
                     ),
-                    // Still said "loading" at cutoff: that is a slow model, not a broken one, so
-                    // name it as such - and say to retry, since by definition it may succeed.
-                    Ok(_) if loading_reported => Fail::new(
-                        504,
-                        "gateway_timeout",
-                        format!(
-                            "{} was still loading its model after {}s; retry once it has finished",
-                            entry.service,
-                            self.startup_timeout.as_secs()
-                        ),
-                    ),
-                    Ok(_) => Fail::new(
-                        504,
-                        "gateway_timeout",
-                        format!(
-                            "{} did not become responsive within {}s on {}",
-                            entry.service,
-                            self.startup_timeout.as_secs(),
-                            addr
-                        ),
-                    ),
-                });
+                ));
             }
             std::thread::sleep(delay);
             delay = (delay * 2).min(Duration::from_millis(500));
         }
-        // It answered, so whatever systemctl claimed was noise.
-        let _ = started_at;
 
         // The unit's own ExecStartPre already published this; writing it again makes the router
         // self-contained for units that do not (and is idempotent for the ones that do).
