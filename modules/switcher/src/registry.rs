@@ -8,8 +8,8 @@
 //! ```text
 //! # comment lines start with '#'
 //! @default<TAB>qwen3.8-flash-next
-//! devices<TAB>id<TAB>service<TAB>remapped<TAB>url<TAB>model_dir<TAB>engine<TAB>capabilities
-//! gpu     <TAB>foo <TAB>gufo-foo.service <TAB>foo <TAB>http://127.0.0.1:8081 <TAB> <TAB>gufo <TAB>chat,completions
+//! devices<TAB>id<TAB>service<TAB>remapped<TAB>url<TAB>model_dir<TAB>engine
+//! gpu     <TAB>foo <TAB>gufo-foo.service <TAB>foo <TAB>http://127.0.0.1:8081 <TAB> <TAB>gufo
 //! ```
 //!
 //! * `devices` is a comma separated list (`gpu`, `npu`, `gpu,npu`). One day a model may need
@@ -77,7 +77,6 @@ pub struct Entry {
     /// Weights directory, pre-flighted before a (possibly minutes-long) unit start.
     pub model_dir: String,
     pub engine: String,
-    pub capabilities: Vec<String>,
 }
 
 impl Entry {
@@ -146,16 +145,6 @@ impl Registry {
                 port,
                 model_dir: fields.get(5).cloned().unwrap_or_default(),
                 engine: fields.get(6).cloned().unwrap_or_default(),
-                capabilities: fields
-                    .get(7)
-                    .map(|c| {
-                        c.split(',')
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
             };
             let idx = entries.len() as u32;
             if by_id.insert(id.clone(), idx).is_some() {
@@ -181,53 +170,6 @@ impl Registry {
             .or_else(|| self.by_alias.get(name))
             .map(|&i| &self.entries[i as usize])
     }
-
-    /// Whether `entry`'s runner claims to serve the route this request targets.
-    ///
-    /// A warning rather than a refusal: the registry is declarative and a capability list can
-    /// legitimately lag behind a runner, so refusing outright would turn a stale Nix entry into
-    /// an outage. The mismatch is logged instead - pointing a chat request at an embeddings-only
-    /// model is otherwise silent until the backend 404s.
-    pub fn serves_route(&self, entry: &Entry, target: &[u8]) -> bool {
-        if entry.capabilities.is_empty() {
-            return true; // nothing declared: the runner decides
-        }
-        let route = match target.iter().position(|&b| b == b'?') {
-            Some(q) => &target[..q],
-            None => target,
-        };
-        // Map the OpenAI route onto a capability name. Order matters twice over:
-        // `/v1/chat/completions` also ends with `/completions`, so the more specific suffix must
-        // be tested first, or a chat-only model would be refused for a chat request.
-        let wanted = if route.ends_with(b"/embeddings") {
-            "embeddings"
-        } else if route.ends_with(b"/rerank") {
-            "rerank"
-        } else if route.ends_with(b"/chat/completions") {
-            // Chat is served by anything that speaks either of these; runners rarely expose one
-            // without the other, and refusing here would break real clients.
-            "chat"
-        } else if route.ends_with(b"/completions") {
-            "completions"
-        } else if route.ends_with(b"/audio/speech") || route.ends_with(b"/transcriptions") {
-            "audio"
-        } else if route.ends_with(b"/images/generations") {
-            "images"
-        } else {
-            return true; // unknown route: not ours to judge
-        };
-        // A runner that declares chat but not completions (or vice versa) still serves both
-        // shapes in practice, so treat them as one family before rejecting.
-        if wanted == "chat" || wanted == "completions" {
-            return entry
-                .capabilities
-                .iter()
-                .any(|c| c == "chat" || c == "completions");
-        }
-        entry.capabilities.iter().any(|c| c == wanted)
-    }
-
-
 
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -304,9 +246,9 @@ mod tests {
     const SAMPLE: &str = concat!(
         "# generated\n",
         "@default\tqwen2.5-72b-instruct\n",
-        "gpu\tqwen2.5-72b-instruct\tgufo-a.service\tqwen2.5-72b-instruct\thttp://127.0.0.1:8081\t\tgufo\tchat,completions\n",
-        "npu\tllama-3.2-1b-npu\tnpu-llama.service\tLlama-3.2-1B-Instruct_rai_1.9.0_npu\thttp://127.0.0.1:8083\t/srv/models/x\tnpu-genai\tchat\n",
-        "gpu,npu\thybrid.service-ish\thybrid.service\thybrid\thttp://127.0.0.1:8090\t\thybrid\t\n",
+        "gpu\tqwen2.5-72b-instruct\tgufo-a.service\tqwen2.5-72b-instruct\thttp://127.0.0.1:8081\t\tgufo\n",
+        "npu\tllama-3.2-1b-npu\tnpu-llama.service\tLlama-3.2-1B-Instruct_rai_1.9.0_npu\thttp://127.0.0.1:8083\t/srv/models/x\tnpu-genai\n",
+        "gpu,npu\thybrid.service-ish\thybrid.service\thybrid\thttp://127.0.0.1:8090\t\thybrid\n",
     );
 
     #[test]
@@ -353,44 +295,6 @@ mod tests {
         assert_eq!(split_authority("h:1"), None);
     }
 
-
-    #[test]
-    fn route_checks_use_declared_capabilities() {
-        let reg = Registry::parse(
-            concat!(
-                "gpu\tg\tsvc-g.service\tg\thttp://127.0.0.1:1\t\tgufo\tchat,completions\n",
-                "gpu\te\tsvc-e.service\te\thttp://127.0.0.1:2\t\tnpu-embeddings\tembeddings\n",
-                "gpu\tf\tsvc-f.service\tf\thttp://127.0.0.1:3\t\topenai-compatible\t\n",
-            ),
-        )
-        .unwrap();
-        let chat = reg.lookup("g").unwrap();
-        let emb = reg.lookup("e").unwrap();
-        let anything = reg.lookup("f").unwrap();
-
-        assert!(reg.serves_route(chat, b"/v1/chat/completions"));
-        assert!(reg.serves_route(chat, b"/v1/completions?x=1"));
-        assert!(!reg.serves_route(chat, b"/v1/embeddings"));
-
-        // Regression: `/v1/chat/completions` also ends with `/completions`. Matching that first
-        // refused every chat-only model for plain chat requests.
-        let reg_chat_only = Registry::parse(concat!(
-            "gpu\tc\tc.service\tc\thttp://127.0.0.1:1\t\tnpu-genai\tchat\n",
-        ))
-        .unwrap();
-        let chat_only = reg_chat_only.lookup("c").unwrap();
-        assert!(reg.serves_route(chat_only, b"/v1/chat/completions"));
-        assert!(reg.serves_route(chat_only, b"/v1/completions"));
-        assert!(!reg.serves_route(chat_only, b"/v1/embeddings"));
-
-        assert!(reg.serves_route(emb, b"/v1/embeddings"));
-        assert!(!reg.serves_route(emb, b"/v1/chat/completions"));
-
-        // No declared capabilities: the runner decides, so nothing is blocked here.
-        assert!(reg.serves_route(anything, b"/v1/chat/completions"));
-        // Unknown routes are not judged at all.
-        assert!(reg.serves_route(emb, b"/health"));
-    }
 
     #[test]
     fn percent_decodes_ids() {
@@ -476,10 +380,8 @@ mod wire_compat {
         assert_eq!(odd.model_dir, "/srv/models/x");
         assert_eq!(odd.engine, "npu-genai");
         assert_eq!(odd.devices, vec![Device::Npu]);
-        assert!(odd.capabilities.is_empty());
 
         let gufo = reg.lookup("qwen3.8-flash-next").unwrap();
-        assert_eq!(gufo.capabilities, vec!["chat", "completions"]);
         assert_eq!(gufo.model_dir, "");
     }
 }

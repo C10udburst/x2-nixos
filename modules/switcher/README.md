@@ -45,16 +45,13 @@ anyway; a kernel zero-copy path would add a failure mode with no payoff.
 Tab-separated, one model per line, generated at Nix eval time from `services.models`:
 
 ```
-devices \t id \t service \t remapped \t url \t model_dir \t engine \t capabilities
+devices \t id \t service \t remapped \t url \t model_dir \t engine
 @default \t <id or empty>
 ```
 
 `\`, TAB, CR and LF are escaped **in that order** by `registry.nix`, so a model id containing a
 tab cannot forge a field boundary. `registry::wire_compat` asserts byte-for-byte agreement with
 the Nix side: if either changes alone, the test fails instead of models silently vanishing.
-
-`capabilities` may be empty, which means "the runner decides" - nothing is then refused on route
-grounds.
 
 ## Behaviour worth knowing before editing
 

@@ -4,7 +4,7 @@
 # no JSON dependency and must resolve a request's model without one. One model per line, tab
 # separated, in exactly the field order `src/registry.rs` parses:
 #
-#   devices \t id \t service \t remapped \t url \t model_dir \t engine \t capabilities
+#   devices \t id \t service \t remapped \t url \t model_dir \t engine
 #
 # * `devices` is a comma separated domain list (`gpu`, `npu`, `gpu,npu`). The router takes every
 #   listed domain's lock in canonical order, so a future two-accelerator model needs no code
@@ -34,7 +34,6 @@
       (field m.url)
       (field m.modelDir)
       (field m.type)
-      (field (lib.concatStringsSep "," m.capabilities))
     ];
 
   text =

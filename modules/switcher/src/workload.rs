@@ -511,7 +511,6 @@ mod tests {
             port: 1,
             model_dir: String::new(),
             engine: "test".into(),
-            capabilities: vec![],
         };
         write_active(&workload.paths, Device::Gpu, "hybrid").unwrap();
         assert!(!workload.is_resident(&entry), "gpu alone is not resident");
@@ -559,7 +558,6 @@ mod tests {
             port: 8081,
             model_dir: String::new(),
             engine: "t".into(),
-            capabilities: vec![],
         };
         assert_eq!(
             backend_addr(&entry).unwrap(),

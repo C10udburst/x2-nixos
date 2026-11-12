@@ -119,25 +119,6 @@ fn serve_one_request(conn: &mut BufReader, router: &Router) -> io::Result<bool> 
         }
     };
 
-    // A chat request aimed at an embeddings-only model is a client or registry mistake; say so
-    // instead of relaying it and surfacing a confusing backend 404.
-    if !router.registry.serves_route(entry, head.target()) {
-        http::write_error(
-            conn,
-            400,
-            "invalid_request_error",
-            &format!(
-                "Model {} does not serve {}; it declares [{}]",
-                entry.id,
-                // Report the route only: echoing the whole target would repeat the client's own
-                // ?model= back at them.
-                route_path(head.target()),
-                entry.capabilities.join(", ")
-            ),
-        )?;
-        return Ok(false);
-    }
-
     // --- make sure it is resident ------------------------------------------
     let workload = Workload {
         paths: cfg.paths.clone(),
@@ -231,8 +212,8 @@ fn serve_one_request(conn: &mut BufReader, router: &Router) -> io::Result<bool> 
     }
 
     eprintln!(
-        // Engine and capability list belong in the journal line: when a request goes to the
-        // wrong runner, `engine=kyojin` next to a `/v1/embeddings` target is the whole answer.
+        // Engine belongs in the journal line: when a request goes to the wrong runner,
+        // `engine=kyojin` next to a `/v1/embeddings` target is the whole answer.
         "switcher: {} {} -> {} [{}] in {:.1}ms",
         String::from_utf8_lossy(head.method()),
         String::from_utf8_lossy(head.target()),
@@ -831,10 +812,4 @@ mod e2e_units {
         println!("RELAYED HEAD:\n{text}");
         assert!(text.starts_with("HTTP/1.1 200 OK\r\n"), "got: {text:?}");
     }
-}
-
-/// The path portion of a request target, without its query string, as `String`.
-fn route_path(target: &[u8]) -> String {
-    let end = target.iter().position(|&b| b == b'?').unwrap_or(target.len());
-    String::from_utf8_lossy(&target[..end]).into_owned()
 }
