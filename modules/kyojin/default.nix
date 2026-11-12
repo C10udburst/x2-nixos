@@ -2,27 +2,30 @@
   config,
   lib,
   pkgs,
-  inputs ? {},
+  inputs ? { },
   ...
-}: let
+}:
+let
   cfg = config.services.kyojin;
 
   rawKyojinPkg =
-    if inputs ? kyojin && inputs.kyojin ? packages
-    then inputs.kyojin.packages.${pkgs.system}.kyojin
-    else pkgs.kyojin or null;
+    if inputs ? kyojin && inputs.kyojin ? packages then
+      inputs.kyojin.packages.${pkgs.system}.kyojin
+    else
+      pkgs.kyojin or null;
 
   defaultKyojinPkg =
-    if rawKyojinPkg != null && inputs ? kyojin
-    then
+    if rawKyojinPkg != null && inputs ? kyojin then
       rawKyojinPkg.overrideAttrs (old: {
         postInstall = (old.postInstall or "") + ''
           cp ${inputs.kyojin}/tools/serve_compat.py $out/share/kyojin/
           cp ${inputs.kyojin}/tools/strix_halo/image_cache.py $out/share/kyojin/
         '';
       })
-    else rawKyojinPkg;
-in {
+    else
+      rawKyojinPkg;
+in
+{
   options.services.kyojin = {
     enable = lib.mkEnableOption "Kyojin exllamav3 inference engine base support" // {
       default = true;
@@ -36,7 +39,7 @@ in {
 
     backendPort = lib.mkOption {
       type = lib.types.port;
-      default = 8083;
+      default = 8085;
       description = "Default loopback port for Kyojin backend instances.";
     };
 
@@ -59,7 +62,7 @@ in {
         "video"
       ];
     };
-    users.groups.kyojin = {};
+    users.groups.kyojin = { };
 
     # Runtime directories
     systemd.tmpfiles.rules = [

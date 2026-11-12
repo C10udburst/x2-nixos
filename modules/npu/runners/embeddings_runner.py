@@ -4,7 +4,7 @@
 Engine-style single-model server, mirroring the GPU runners: one model directory per
 process, loaded once, serves until killed. Workload switching is systemd's job.
 
-    embeddings_runner.py --model /srv/models/embeddinggemma-300m --alias embeddinggemma-300m --port 8085
+    embeddings_runner.py --model /srv/models/embeddinggemma-300m --alias embeddinggemma-300m --port 8084
 
 Runtime status on the EVO-X2 (full recipe in ../README.md):
   * Verified working: onnxruntime 1.30.0 (`onnxruntime_vitisai` wheel) reports

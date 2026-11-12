@@ -2,9 +2,10 @@
   pkgs,
   lib,
   config,
-  inputs ? {},
+  inputs ? { },
   ...
-}: {
+}:
+{
   modelId ? name,
   name ? null,
   modelPath,
@@ -13,7 +14,7 @@
   flavor ? "glm",
   context ? null,
   sessions ? 1,
-  port ? (config.services.kyojin.backendPort or 8083),
+  port ? (config.services.kyojin.backendPort or 8085),
   modelsDir ? (config.services.kyojin.modelsDir or "/srv/models"),
   package ? null,
   numDraft ? 2,
@@ -29,17 +30,24 @@
   noUncensor ? false,
   uncensor ? null,
   uncensorSpec ? null,
-  extraArgs ? [],
-  env ? {},
-}: let
+  extraArgs ? [ ],
+  env ? { },
+}:
+let
   kyojinPkg =
-    if package != null
-    then package
-    else if config.services ? kyojin && config.services.kyojin ? package && config.services.kyojin.package != null
-    then config.services.kyojin.package
-    else if inputs ? kyojin && inputs.kyojin ? packages
-    then inputs.kyojin.packages.${pkgs.system}.kyojin
-    else pkgs.kyojin or (throw "Kyojin package not found. Ensure inputs.kyojin is passed or specify package.");
+    if package != null then
+      package
+    else if
+      config.services ? kyojin
+      && config.services.kyojin ? package
+      && config.services.kyojin.package != null
+    then
+      config.services.kyojin.package
+    else if inputs ? kyojin && inputs.kyojin ? packages then
+      inputs.kyojin.packages.${pkgs.system}.kyojin
+    else
+      pkgs.kyojin
+        or (throw "Kyojin package not found. Ensure inputs.kyojin is passed or specify package.");
 
   defaultEnv = {
     HIP_VISIBLE_DEVICES = "0";
@@ -53,7 +61,13 @@
     set -euo pipefail
 
     # Ensure Triton kernel compiler and ROCm JIT find GCC and Ninja
-    export PATH="${lib.makeBinPath [ pkgs.gcc pkgs.ninja pkgs.coreutils ]}:$PATH"
+    export PATH="${
+      lib.makeBinPath [
+        pkgs.gcc
+        pkgs.ninja
+        pkgs.coreutils
+      ]
+    }:$PATH"
     export CC="${pkgs.gcc}/bin/gcc"
     export CXX="${pkgs.gcc}/bin/g++"
 
@@ -153,16 +167,22 @@
 
     exec ${kyojinPkg}/bin/kyojin-serve-${flavor} "''${ARGS[@]}"
   '';
-in {
+in
+{
   device = "gpu";
   serviceName = "kyojin-${modelId}.service";
   type = "kyojin";
-  inherit remappedModel description sessions context;
+  inherit
+    remappedModel
+    description
+    sessions
+    context
+    ;
   url = "http://127.0.0.1:${toString port}";
 
   systemdService = {
     description = "Kyojin LLM Service: ${modelId} (${description})";
-    after = ["network.target"];
+    after = [ "network.target" ];
     path = [
       pkgs.gcc
       pkgs.ninja
