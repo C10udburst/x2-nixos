@@ -9,7 +9,8 @@ mod stream;
 mod workload;
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::time::{Duration, Instant};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::thread;
 
@@ -18,7 +19,9 @@ use crate::http::Framing;
 use crate::pool::Pool;
 use crate::registry::Registry;
 use crate::stream::Stream;
-use crate::workload::{backend_addr as resolve_backend_addr, Workload};
+use crate::workload::{
+    backend_addr as resolve_backend_addr, probe as probe_ready, Readiness, Workload,
+};
 
 // ---------------------------------------------------------------------------
 // Worker: one client connection -> read head/body -> resolve workload -> relay -> respond
@@ -213,6 +216,31 @@ fn serve_one_request(conn: &mut BufReader, router: &Router) -> io::Result<bool> 
     let resp_framing = resp_head.response_framing(head.method_is(b"HEAD"));
     let client_reuse = client_reuse_requested && !resp_head.wants_close();
 
+    // A backend that answers `503 {"error":{"message":"Loading model"}}` is up but has not
+    // finished loading its weights. That must not reach the client as an error: hold this
+    // connection, wait for readiness, then replay the request. See `relay.rs` for the marker set.
+    //
+    // The status line is always in the first segment; the JSON body may arrive one segment later,
+    // so ask for the body only once the code says it could be a load-in-progress notice.
+    if backend_says_loading(
+        &resp_head,
+        &mut resp_prefix,
+        &mut backend,
+        cfg.backend_read,
+        cfg.backend_write,
+    )? {
+        router.pool.evict(entry);
+        drop(backend);
+        return replay_once_loaded(
+            conn,
+            router,
+            backend_addr,
+            &out,
+            &model_id,
+            head.method_is(b"HEAD"),
+        );
+    }
+
     http::write_relay_response(conn, &resp_head, resp_framing, client_reuse)?;
 
     match resp_framing {
@@ -245,6 +273,193 @@ fn serve_one_request(conn: &mut BufReader, router: &Router) -> io::Result<bool> 
         started.elapsed().as_secs_f64() * 1000.0
     );
     Ok(client_reuse)
+}
+
+/// Decide whether a backend response means "still loading", without racing the network.
+///
+/// `read_response_head` returns as soon as the blank line arrives, and a small JSON error body can
+/// easily land in the *next* segment - so matching the head alone would miss it. The status code is
+/// always available immediately, however, and only a `5xx` can carry this notice, so:
+///
+/// * non-5xx -> definitively not a load notice (a `< 500` that somehow contains the phrase is
+///   relayed untouched rather than guessed about);
+/// * 5xx with the phrase already buffered -> load in progress;
+/// * 5xx with nothing buffered -> read a little more, bounded by a short timeout, then decide.
+///
+/// Any bytes read here are appended to `prefix`, so the normal relay path still forwards them if
+/// this turns out to be an ordinary 500.
+fn backend_says_loading(
+    resp_head: &http::Head,
+    prefix: &mut Vec<u8>,
+    backend: &mut Stream,
+    read_timeout: Duration,
+    write_timeout: Duration,
+) -> io::Result<bool> {
+    if !matches!(resp_head.status(), 500..=599) {
+        return Ok(false);
+    }
+    if relay::says_loading(&[], prefix) {
+        return Ok(true);
+    }
+    // The socket's normal read timeout is minutes (a slow inference response is legitimate), which
+    // would block this check instead of letting it poll a short deadline. Narrow it for the probe
+    // and put it back before returning, since the same socket continues on to the relay path.
+    const WAIT: Duration = Duration::from_millis(300);
+    let _ = backend.set_timeouts(WAIT, WAIT);
+    let outcome = drain_for_marker(prefix, backend, WAIT);
+    let _ = backend.set_timeouts(read_timeout, write_timeout);
+    outcome
+}
+
+fn drain_for_marker(
+    prefix: &mut Vec<u8>,
+    backend: &mut Stream,
+    wait: Duration,
+) -> io::Result<bool> {
+    let deadline = Instant::now() + wait;
+    let mut scratch = [0u8; 2048];
+    loop {
+        if relay::says_loading(&[], prefix) {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline || prefix.len() > 8192 {
+            return Ok(false);
+        }
+        match backend.read(&mut scratch) {
+            Ok(0) => return Ok(false),
+            Ok(n) => prefix.extend_from_slice(&scratch[..n]),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            // A timeout here just means no body came: not a load notice.
+            Err(_) => return Ok(false),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// waiting out a model load, on the client's own connection
+// ---------------------------------------------------------------------------
+
+/// Hold the client's connection until the backend finishes loading, then replay the request.
+///
+/// This is what makes "the model is coming up" invisible to the caller: instead of an error the
+/// app has to interpret and retry, the TCP stream simply stays open - which is how llama.cpp's
+/// own clients already behave against a cold server.
+///
+/// `request` is the fully-formed outbound head + body, so replaying it is byte-identical to the
+/// first attempt; nothing has been written to the client yet, so a later error response is still
+/// legal.
+fn replay_once_loaded<W: Write>(
+    conn: &mut W,
+    router: &Router,
+    addr: SocketAddr,
+    request: &[u8],
+    model_id: &str,
+    head_request: bool,
+) -> io::Result<bool> {
+    let cfg = &router.config;
+    let deadline = Instant::now() + cfg.startup_timeout;
+    let mut delay = Duration::from_millis(100);
+    let mut announced = false;
+
+    loop {
+        std::thread::sleep(delay);
+        delay = (delay * 2).min(Duration::from_millis(1000));
+
+        if !announced {
+            // One line per wait, so a multi-minute load is visible in the journal without
+            // spamming it on every poll round.
+            eprintln!(
+                "switcher: model {} is still loading, holding the client connection open",
+                model_id
+            );
+            announced = true;
+        }
+
+        match probe_ready(addr, &cfg.health_paths, Duration::from_millis(1500)) {
+            Readiness::Ready => {}
+            Readiness::Loading | Readiness::Unresponsive => {
+                if Instant::now() >= deadline {
+                    http::write_error(
+                        conn,
+                        504,
+                        "gateway_timeout",
+                        &format!(
+                            "Model {} was still loading after {}s; retry once it has finished",
+                            model_id,
+                            cfg.startup_timeout.as_secs()
+                        ),
+                    )?;
+                    return Ok(false);
+                }
+                continue;
+            }
+        }
+
+        // Ready: reconnect (the previous socket was closed by the "loading" reply) and replay.
+        let mut backend = match TcpStream::connect_timeout(&addr, cfg.connect_timeout) {
+            Ok(tcp) => Stream::Tcp(tcp),
+            Err(err) => {
+                http::write_error(
+                    conn,
+                    502,
+                    "bad_gateway",
+                    &format!("Backend for model {} refused reconnection: {err}", model_id),
+                )?;
+                return Ok(false);
+            }
+        };
+        backend.set_timeouts(cfg.backend_read, cfg.backend_write)?;
+        backend.set_nodelay()?;
+        backend.write_all(request)?;
+        backend.flush()?;
+
+        let mut head_raw = Vec::with_capacity(1024);
+        let mut prefix: Vec<u8> = Vec::new();
+        if !read_response_head(&mut backend, &mut head_raw, &mut prefix)? {
+            http::write_error(
+                conn,
+                502,
+                "bad_gateway",
+                &format!("Backend for model {} closed on retry", model_id),
+            )?;
+            return Ok(false);
+        }
+        let resp_head = match http::parse_head(&head_raw) {
+            Ok(Some(head)) => head,
+            _ => {
+                http::write_error(
+                    conn,
+                    502,
+                    "bad_gateway",
+                    &format!("Backend for model {} answered malformed on retry", model_id),
+                )?;
+                return Ok(false);
+            }
+        };
+        // Still loading (the probe raced with reality): keep waiting rather than forwarding it.
+        if relay::says_loading(&head_raw, &prefix) {
+            drop(backend);
+            continue;
+        }
+
+        let framing = resp_head.response_framing(head_request);
+        // Report `Connection: close` to the client: this socket is not pooled (see below), so
+        // promising reuse we do not deliver would leave the client sending its next request into a
+        // dead connection.
+        http::write_relay_response(conn, &resp_head, framing, false)?;
+        match framing {
+            Framing::None => {}
+            Framing::Length(len) => relay_length(&mut backend, conn, len, &mut prefix)?,
+            Framing::Chunked => relay_chunked(&mut backend, conn, &mut prefix)?,
+            Framing::UntilEof => relay_until_eof(&mut backend, conn, &mut prefix)?,
+        }
+        conn.flush()?;
+        // Reuse is deliberately skipped here: this path is rare, and pooling a socket whose
+        // keep-alive semantics were decided under a retry is not worth the risk of handing a
+        // half-used connection to another request.
+        drop(backend);
+        return Ok(false);
+    }
 }
 
 // ---------------------------------------------------------------------------

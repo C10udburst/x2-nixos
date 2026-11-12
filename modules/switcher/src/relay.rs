@@ -10,6 +10,36 @@
 //! Getting the second one wrong would either truncate an SSE token stream or hand a still-busy
 //! backend socket to another request.
 
+// ------------------------------------------------------------------ "still loading"
+
+/// Substrings that mean "a process answers, but its weights are not resident yet".
+///
+/// llama-server binds its listening socket before loading the model and keeps replying
+/// `503 {"error":{"message":"Loading model",...}}` for as long as that takes - minutes on a
+/// multi-hundred-gigabyte GGUF. Both the readiness probe (`workload::probe`) and the relay use
+/// this so the two can never disagree about what "not ready" looks like.
+const LOADING_MARKERS: &[&[u8]] = &[
+    b"loading model",
+    b"model is loading",
+    b"loading_model",
+    b"server is loading",
+];
+
+/// Does this response say the backend is still loading?
+///
+/// `head` is the raw response head and `prefix` any body bytes already read with it. Matching the
+/// *body* rather than the status code is deliberate: a 503 alone could be overload, and a `< 500`
+/// carrying this message must still count as not-ready.
+pub fn says_loading(head: &[u8], prefix: &[u8]) -> bool {
+    let mut haystack = Vec::with_capacity(head.len() + prefix.len());
+    haystack.extend_from_slice(head);
+    haystack.extend_from_slice(prefix);
+    haystack.make_ascii_lowercase();
+    LOADING_MARKERS
+        .iter()
+        .any(|marker| haystack.windows(marker.len()).any(|w| w == *marker))
+}
+
 
 
 // ------------------------------------------------------------------------ chunked
