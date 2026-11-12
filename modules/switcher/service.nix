@@ -17,6 +17,7 @@
     rustPlatform = pkgs.rustPlatform;
   };
 in {
+  # NOTE: everything above this `in` is one `let` block (package, registry, lockDir).
   options.services.switcher = {
     enable = lib.mkEnableOption ''
       the Rust /v1/* model router (replaces the FastCGI switcher.sh CGI script)
@@ -36,6 +37,11 @@ in {
     };
   };
 
+  # Single source of truth for where locks and per-domain state files live. It appears three
+  # times that must never disagree: the --lock-dir argument, the ReadWritePaths hole punched in
+  # the sandbox, and the tmpfiles entries in modules/workload-manager.nix.
+  lockDir = "/run/model-lock";
+
   config = lib.mkIf cfg.enable {
     # The router is a long-lived daemon instead of eight preforked CGI workers: an idle accept()
     # costs no CPU at all, which is what keeps an unloaded gateway at zero cycles.
@@ -54,7 +60,7 @@ in {
           "--socket-mode"
           "0660"
           "--lock-dir"
-          "/run/model-lock"
+          lockDir
           "--systemctl"
           "${pkgs.systemd}/bin/systemctl"
           "--sudo"
@@ -74,6 +80,14 @@ in {
         # Orchestration only: systemctl + flock + reading tmpfs state.
         NoNewPrivileges = false; # needs sudo -> systemctl
         ProtectSystem = "strict";
+
+        # ProtectSystem=strict makes /run read-only, and RuntimeDirectory= only re-writes its own
+        # subdirectory (/run/switcher). Without this the router cannot open `<device>.lock` for
+        # writing nor update `active_<device>`, so every request that actually needs a workload
+        # switch fails with EROFS while the already-resident fast path keeps working - which is
+        # exactly the split behaviour seen when switching to a model that is not loaded yet.
+        # The directory itself is created by modules/workload-manager.nix's tmpfiles rules.
+        ReadWritePaths = [ lockDir ];
         ProtectHome = true;
         PrivateTmp = true;
         LimitNOFILE = 65536;

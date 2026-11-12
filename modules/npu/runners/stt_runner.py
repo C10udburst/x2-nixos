@@ -107,8 +107,9 @@ class WhisperONNX:
             if os.path.exists(os.path.join(os.path.dirname(encoder_path), "tokenizer.json")) \
             else Tokenizer.from_pretrained(f"openai/{model_type}")
 
-        self.sot_token = self.tokenizer.token_to_id("<|startoftranscript|>")
-        self.eos_token = self.tokenizer.eos_token_id
+        # tokenizers.Tokenizer has no .eos_token_id; Whisper vocabularies use 50257 (<|endoftext|>)
+        self.sot_token = self.tokenizer.token_to_id("<|startoftranscript|>") or 50258
+        self.eos_token = self.tokenizer.token_to_id("<|endoftext|>") or 50257
 
         # Decoder max length (static shape from the compiled artifact)
         dec_inp = self.decoder.get_inputs()[0]
