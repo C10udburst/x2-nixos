@@ -15,113 +15,137 @@ never evict across domains.
 ## Layout
 
 ```
-default.nix              services.npu: user, device, runtime environment, stack self-check
-mkNpuModel.nix           per-model registry entry -> one runner process + one systemd unit
-packages/ryzen-ai.nix    the AMD runtime as derivations (fetched by hash, fixed, smoke-tested)
-packages/amdxdna-driver.nix  AMD's out-of-tree NPU driver from XRT, for kernels whose
-                             in-tree amdxdna lags the userspace (services.npu.xrtDriver)
+default.nix              services.npu: user, accel device, base environment
+openflow.nix             services.npu.openflowlm: engine, kernel set, model store, power mode
+openflow-kernels.nix     prebuilt xclbin set taken from the flake source (no kernel toolchain)
+mkOpenFlow.nix           catalogue tag -> one `oflm serve` process + one systemd unit
+README.md                this file
+packages/ryzen-ai.nix    AMD's proprietary ONNX stack, for the legacy runners below
+packages/amdxdna-driver.nix  AMD's out-of-tree NPU driver (services.npu.xrtDriver)
 packages/strip-execstack.py  clears PT_GNU_STACK X (kernel >= 6.6 rejects it on dlopen)
-runners/npu_http.py      minimal /health + modality routes, SSE streaming, one session/lock
-runners/genai_runner.py  onnxruntime-genai model -> /v1/chat/completions, /v1/completions
-runners/embeddings_runner.py  ONNX + VitisAI EP -> /v1/embeddings
+runners/                 legacy Python runners (onnxruntime-genai, VitisAI EP) — unused by the registry
 ```
 
-Model weights are host state under `services.npu.modelsDir` (`/srv/models/<registry id>`) and
-are installed by the operator - nothing in this module downloads anything.
+Weights are host state under `services.npu.openflowlm.modelStore` (`/srv/models/oflm`) and the
+operator installs them. Nothing in this repo downloads a model.
 
-## The runtime is a package, not a script install
+## The engine: OpenFlowLM
 
-`packages/ryzen-ai.nix` builds the whole stack from AMD's pinned tarballs:
-
-| attribute | contents |
-| --- | --- |
-| `dist` | wheels + `deployment/lib` extracted from `ryzen-ai-1.9.0.tgz` (only the members inference needs, not all 12 GB) |
-| `xrt` | the four `RAI_1.9_Linux_NPU_XRT` Debian packages unpacked into one tree (`$xrt/opt/xilinx/xrt`) |
-| `amdxdnaSource` | out-of-tree amdxdna driver source shipped inside XRT, ready for a DKMS build |
-| `libs` | `LD_LIBRARY_PATH`: AMD deployment libs + XRT libs + `libz`/`libuuid`/`libncurses`/`libtinfo`/`libpython3.12` |
-| `amdPythonEnv` | the three wheels pip-installed into one prefix (they share `onnxruntime/capi`), with `checkPhase` asserting `VitisAIExecutionProvider` registers |
-| `pythonPath` | `PYTHONPATH`: AMD wheels + nixpkgs `numpy tokenizers coloredlogs flatbuffers packaging protobuf sympy` |
-| `runtimeEnv` | the four variables a runner needs, ready for systemd `Environment=` |
-
-Why not `pypi.amd.com`: it answers **403** from both the workstation and the box, so
-upstream's `pip install --index-url ...` recipe cannot be used here. `voe` (2.8 GB),
-`ryzenai_dynamic_dispatch*` (2.7 GB) and `cardano` (0.3 GB) are intentionally excluded —
-voe is a quantisation tool, cardano is the AIE compiler client, and the dynamic-dispatch
-runtime those wheels wrap already ships in `deployment/lib` (`libdyn_bins.so` 1.38 GB,
-`libdyn_dispatch_core.so` 206 MB). The AMD quicktest runs on the NPU without them.
-
-## One runner per model, like the GPU side
-
-`mkNpuModel` produces the same shape as `mkGufo`/`mkLlamaCpp`: a `writeShellScript` launcher,
-one engine process bound to one port, `Restart = no`, and the workload switch is literally
-"stop this unit, start that one". No dispatcher, no adapter registry, no `/v1/models` — the
-gateway switcher (`modules/dash/switcher.sh`) owns routing, remapping and the catalogue.
+[OpenFlowLM-Next](https://github.com/Atomic-Germ/OpenFlowLM-Next) is an open fork of
+ROCm/FastFlowLM for XDNA 2. It is a C++ engine whose HTTP server already speaks OpenAI, so the
+NPU domain gets the same shape as every other domain: **one process, one model, one port**.
 
 ```nix
-"llama-3.2-1b-npu" = mkNpuModel {
-  modelId = "llama-3.2-1b-npu";
-  description = "Llama 3.2 1B Instruct int4 on the XDNA 2 NPU (~2 W, off the GPU)";
-  remappedModel = "Llama-3.2-1B-Instruct_rai_1.9.0_npu";
-  kind = "genai";
-  port = 8083;
-  context = 8192; # declared window: exported as NPU_CONTEXT_LENGTH, shown by /v1/models
-};
+# models/npu.nix
+"llama3.2:1b"      = mkOpenFlow { modelId = "llama3.2:1b";      port = 8083; };
+"llama3.2:3b"      = mkOpenFlow { modelId = "llama3.2:3b";      port = 8084; };
+"whisper-v3:turbo" = mkOpenFlow { modelId = "whisper-v3:turbo"; port = 8087; kind = "asr"; };
 ```
 
-`kind` selects the runner (`genai` | `embeddings` | `asr` | `image-gen`) and the advertised
-capabilities; the weights directory is `services.npu.modelsDir/<modelId>`, checked in
-`ExecStartPre`, so weights that are not in place fail in the journal with the missing path
-instead of leaving the gateway on a half-open connection. `context` is optional: without it
-the runner keeps whatever `genai_config.json` declares.
+Decisions worth knowing before touching this:
 
-## Status: LLMs run on the NPU (with `services.npu.xrtDriver`), embeddings still do not
+* **The registry key is the engine's tag** (`llama3.2:1b`, not `llama-3.2-1b-npu`). The Rust
+  router resolves a model and forwards the body **verbatim** — there is no body rewrite
+  anywhere in the pipeline, so `remappedModel` cannot paper over a key the backend does not
+  know. Ollama-style tags keep `/v1/models`, the dashboard and the wire format in one name.
+* **The catalogue is read at eval time.** `mkOpenFlow` opens
+  `<openflowlm source>/src/model_list.json` to get the on-disk directory name, the declared
+  context window and the description. An unknown tag is a Nix eval error that lists the valid
+  ones (chat tags and ASR tags separately), not a unit that fails at 03:00.
+* **Kernels are not built here.** `openflow-kernels.nix` copies the precompiled AMD xclbins
+  that ship in the repository into `<pkg>/share/oflm/xclbins`, which is the first path the
+  engine searches. The alternative — the flake's own `openflowlm-open-kernels` — drags in
+  mlir-aie, Peano and the IRON venv, and its BERT sets need `/dev/accel*` at build time
+  (`__noChroot`), which a sandboxed `nixos-rebuild` refuses. `.#openflowlm-full` builds those
+  on purpose, on a host, when someone wants open kernels.
+* **The input is pinned as a GitHub archive URL.** The repository has an uninitialized gitlink
+  (`third_party/tokenizers-cpp`) and the git fetcher normalizes that empty directory
+  differently across nix patch releases: the same rev produced two different NAR hashes on the
+  two machines used here, so a `github:` pin resolved on one host would not download on the
+  other. The archive hashes identically everywhere and the engine never needs that submodule
+  (its `package.nix` deletes `third_party/tokenizers-cpp` and fetches its own).
+* **`nixpkgs` does not follow.** The engine builds against its own pin and pulls nix-amd-ai's
+  XRT + amdxdna plugin through it; following ours would re-hash that closure and lose every
+  prebuilt artifact the upstream cache carries.
+* **Health check is `/api/version`.** The runners expose no `/health`, and the engine has no
+  `/v1/models`-style readiness either; `modules/switcher/src/http.rs` already treats
+  `/api/version` as healthy. Note that the engine's own `/v1/models` answers with the *whole
+  catalogue*, not the loaded model — the gateway's `/v1/models` is generated from
+  `services.models` and is what the dashboard reads.
+* **`SIGINT`, not `SIGTERM`.** `oflm` tears down its server thread on Ctrl-C; SIGTERM can cut
+  mid-context and leave the AIE partition to the driver's cleanup.
 
-Verified **on this machine** (`llm`, kernel 7.2.9, `/dev/accel/accel0`):
+## Operation
 
-* ORT 1.30 accepts `providers=["VitisAIExecutionProvider"]`, reports
-  `['VitisAIExecutionProvider', 'CPUExecutionProvider']`, and honours `provider_options`
-  (`load_as_static=1`, `session_use_graph_batching`).
-* AMD's official quicktest CNN builds the VitisAI Prefix graph (`Compiled model cost: 0.123s`,
-  `VitisEP: Found Ep compatible nodes in this module: 225`), executes on the NPU
-  (`Using dpu : NPU0`, `NPU kernel time: 3234 us`), and returns numerics identical to CPU.
-* Execstack and all missing sonames are handled by the derivations, so this needs no manual
-  environment fiddling.
+```bash
+# weights, as the service user, into the store the units read
+sudo -u npu env OFLM_MODEL_PATH=/srv/models/oflm HOME=/var/lib/oflm \
+    oflm pull llama3.2:1b
+sudo -u npu env OFLM_MODEL_PATH=/srv/models/oflm HOME=/var/lib/oflm \
+    oflm pull whisper-v3:turbo
 
+# what is available, and what is installed (⏬ marks the missing ones)
+oflm list
 ```
-curl :8199/v1/chat/completions  {"messages":[…"Name three cities in Japan"…]}
-  -> "1. Tokyo  2. Osaka  3. Fukuoka"   finish_reason=stop, 45+21 tokens
-measured decode: 59.3 tok/s (Llama-3.2-1B int4, og.Generator loop, NPU)
+
+`HOME` matters: `oflm` keeps its registry and `settings.json` there, and systemd hands a
+`User=` service no HOME at all unless the unit sets one — which `mkOpenFlow` does
+(`/var/lib/oflm`, also `StateDirectory=`).
+
+Talking to the two services directly, bypassing the gateway:
+
+```bash
+curl -s http://127.0.0.1:8083/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"llama3.2:1b","messages":[{"role":"user","content":"hi"}]}'
+
+# ASR: the `model` field is REQUIRED by the engine, 400 without it
+curl -s http://127.0.0.1:8087/v1/audio/transcriptions \
+  -F model=whisper-v3:turbo -F file=@sample.wav
 ```
 
-### The LLM path needed AMD's out-of-tree driver (fixed)
+## Measured on this host
 
-With mainline's `amdxdna` every LLM session (ONNX Runtime GenAI *and* plain ORT on AMD's
-Llama-3.2-1B NPU artifact) failed identically inside the driver, after ~1 s of real NPU work:
-`DRM_IOCTL_AMDXDNA_CREATE_BO … (err=-14: Bad address)` /
-`amdxdna_get_ubuf: Failed to pin pages ret -14`.
+Engine build: **240 s** on 12 cores with `https://nix-amd-ai.cachix.org` configured (XRT,
+boost, the Rust tokenizer crate all substitute; only the engine itself compiles).
 
-That was a driver/userspace version gap, not a usage error (reproduced with `load_as_static`,
-graph batching, the tokenizer removed, and with two different artifacts). Mainline's driver is
-0.10.0-era and has no `amdxdna_ubuf_get_pages`, no `amdxdna_dpt.c` and no `npu6_regs`; AMD
-develops the driver out-of-tree ([amd/xdna-driver](https://github.com/amd/xdna-driver), 2.2x)
-and ships it inside XRT as a DKMS package. `nix flake update` therefore cannot fix it — there
-is no synced mainline release to update to.
+`whisper-v3:turbo` alone, `oflm serve --asr 1 --asrmodel whisper-v3:turbo`, **no chat model
+loaded** — the startup log loads nothing but `Whisper-V3-Turbo-NPU2`, and the process holds
+**~1 GB RSS**:
 
-`services.npu.xrtDriver = true;` builds that tree for the running kernel
-(`packages/amdxdna-driver.nix`) and installs it as `updates/amdxdna.ko`, which depmod prefers
-over the in-tree copy — no nixpkgs kernel patching, no DKMS daemon, nothing outside the store.
-It took effect live here with `rmmod amdxdna && insmod …/updates/amdxdna.ko` (0.10.0 → 0.16.0,
-`version: 2.26.260102.59.release`); a reboot is what makes it permanent.
+```json
+{"model":"whisper-v3:turbo","text":" And so, my fellow Americans, ask not what your country can do for you ask what you can do for your country."}
+```
 
-### Embeddings still need an AMD fix
+11 s of audio in **2.4 s** wall, cold start to serving in ~20 s.
 
-`runners/embeddings_runner.py` is code-complete, but the only artifact AMD publishes for it,
-`amd/embeddinggemma-300m_npu_rai_1.8.0_npu_4K`, references `com.ryzenai:CastAvx`, which no
-1.8.0/1.9.0 runtime registers (same class as open
-[amd/RyzenAI-SW#387](https://github.com/amd/RyzenAI-SW/issues/387), filed against 1.8.0 and
-still open). `libvitis_ai_custom_opset.so` only exports `com.ryzenai:LayerNorm` /
-`com.ryzenai:NPU`, so it is not a missing-library problem. The runner does fix the artifact's
-`metadata_int8` schema drift (`scale_f` → `value`) for the files that do load.
+`llama3.2:1b`: **61.9 tok/s decode**, 91.8 tok/s prefill, SSE chunks stream correctly.
 
-`models/npu.nix` registers `llama-3.2-1b-npu` (dashboard, `/v1/*` routing, per-domain lock)
-and keeps the embeddings entry commented out with the reason above.
+## Rejected alternatives
+
+* **Whisper through AMD's `ryzen-ai` ONNX wheels.** Two models deep in the same process —
+  the ONNX Runtime *plus* a pipeline wrapper — ~4 GB RSS to transcribe, and no OpenAI route:
+  it is a Python API, so a runner has to be written and maintained around it. `oflm` already
+  ships the route.
+* **FastFlowLM (upstream).** Same build cost, same closed kernels, but no standalone
+  `--asr 1` server mode; Whisper there rides along with a chat model.
+* **ROCm/llama.cpp for Whisper.** CPU-only for this model class on this box, which is exactly
+  the workload the NPU exists to take off the cores.
+
+## Legacy: the ONNX stack (`packages/ryzen-ai.nix`, `runners/`)
+
+`mkNpuModel` still works and still honours the model contract; `models/npu.nix` simply no
+longer calls it. It is the path for a **closed** AMD artifact that `oflm` cannot host — the
+VitisAI EP is registered by `packages/ryzen-ai.nix` and asserted in its `installCheckPhase`.
+Two facts from that work still stand and still bind anything NPU-side:
+
+1. **LLM/genai needs AMD's out-of-tree driver** (`services.npu.xrtDriver`, built by
+   `packages/amdxdna-driver.nix`). Mainline's in-tree `amdxdna` is 0.10.0-era: no
+   `amdxdna_ubuf_get_pages`, no `amdxdna_dpt.c`, and every LLM session died in
+   `DRM_IOCTL_AMDXDNA_CREATE_BO failed (err=-14)`. `nix flake update` cannot close that gap;
+   enabling the option needs a reboot. The engine here runs on the same driver stack the
+   deployment already carries.
+2. **AMD's EmbeddingGemma NPU artifact is unrunnable** with any 1.8/1.9 runtime:
+   `com.ryzenai:CastAvx` is referenced by the only published artifact and registered by none
+   ([amd/RyzenAI-SW#387](https://github.com/amd/RyzenAI-SW/issues/387)). The registry entry
+   stays commented out with that reason.

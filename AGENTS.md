@@ -46,7 +46,7 @@ digraph EVO_X2 {
 3. **0 MB RAM Footprint on Boot**: Standalone workloads like Immich and ComfyUI run via systemd socket activation. On boot, only listening sockets exist in kernel memory (~0 MB RAM). Heavy backend services only start upon incoming connections.
 4. **Eval-Time Calculated Conflicts & Stop Script**: Zero ugly unit globbing (e.g. `systemctl list-units ... "gufo-*"`). All exclusive service units are collected at Nix eval time, per domain, into `gpuExclusiveUnits` and `npuExclusiveUnits`. A dedicated script (`stop-other-workloads <device> <target_unit>`) stops any active conflicting workloads **of that domain** before starting the target. The device argument is mandatory: there is no silent GPU fallback and no way to evict across domains by accident.
 5. **Independent Lock Protocol (Rule 5)**: Synchronization is strictly decoupled from Nginx or FastCGI. Any component orchestrating workload lifecycle acquires that domain's lock (`/run/model-lock/gpu.lock` or `/run/model-lock/npu.lock`) via `flock`. A request locks **only its own domain**, so an NPU switch never waits behind a GPU model load and no cross-domain lock ordering (and therefore no deadlock) can arise.
-6. **NPU Is A First-Class Domain (`modules/npu/`)**: AMD's proprietary Ryzen AI stack is a *derivation* (`modules/npu/packages/ryzen-ai.nix`, fetched by hash, executable-stack fixed, `installCheckPhase` asserts the VitisAI EP registers) - never a shell installer. Each NPU model is one runner process, exactly like `gufo`/`llama-server`: `mkNpuModel` renders a launcher + unit, and switching workloads means stopping one unit and starting another. See `modules/npu/README.md`.
+6. **NPU Is A First-Class Domain (`modules/npu/`)**: The domain's engine is [OpenFlowLM](https://github.com/Atomic-Germ/OpenFlowLM-Next) (a flake input), an open fork of ROCm/FastFlowLM whose server speaks OpenAI directly: one `oflm serve` process per model, one port, one unit, exactly like `gufo`/`llama-server`. `mkOpenFlow` renders the launcher + unit from the engine's own model catalogue, read from the flake source at eval time, so a tag that does not exist is a Nix eval error instead of a runtime 404. AMD's proprietary Ryzen AI wheel stack remains packaged as a *derivation* (`modules/npu/packages/ryzen-ai.nix`, hash-pinned, executable-stack fixed, `installCheckPhase` asserts the VitisAI EP registers) for the ONNX runners in `modules/npu/runners/`; `mkNpuModel` is still available, but the registry no longer uses it. See `modules/npu/README.md`.
 
 ---
 
@@ -56,12 +56,13 @@ Every model is one `services.models.<model_id>` entry. **`modules/models.nix` is
 only** - it declares the contract below, builds the engine factories and instantiates one
 systemd unit per entry. The raw declarations live one file per hardware domain:
 
-| file | contents |
-| --- | --- |
-| `models/gpu.nix` | RDNA 3.5 iGPU models (`mkGufo`, `mkLlamaCpp`, `mkKyojin`) |
-| `models/npu.nix` | XDNA 2 models (`mkNpuModel`), gated on `services.npu.enable` |
+| file             | contents                                                     |
+| ---------------- | ------------------------------------------------------------ |
+| `models/gpu.nix` | RDNA 3.5 iGPU models (`mkGufo`, `mkLlamaCpp`, `mkKyojin`)    |
+| `models/npu.nix` | XDNA 2 models (`mkOpenFlow`), gated on `services.npu.enable` |
 
-Both receive `mkGufo` / `mkLlamaCpp` / `mkKyojin` / `mkNpuModel` through `_module.args`, so a
+All of them arrive through `_module.args` (`mkGufo` / `mkLlamaCpp` / `mkKyojin` / `mkNpuModel` /
+`mkOpenFlow`), so a
 registry file has no imports and no logic of its own.
 
 ### The Contract
@@ -74,7 +75,7 @@ Every model entry in `services.models` MUST adhere to the following attribute sc
   url,             # String: HTTP loopback URL (e.g. "http://127.0.0.1:8081")
   systemdService,  # AttrSet: standard NixOS systemd.services unit configuration
   description,     # (Optional) String: human-readable description for dashboard (default: "")
-  type,            # (Optional) String: engine identifier ("gufo" | "llama-cpp" | "kyojin" | "npu-genai" | "npu-embeddings")
+  type,            # (Optional) String: engine identifier ("gufo" | "llama-cpp" | "kyojin" | "openflow-chat" | "openflow-asr" | "npu-genai" | ...)
   sessions,        # (Optional) Int: maximum concurrent sessions / slots (default: 1)
   context,         # (Optional) Int|null: context window per session in tokens (default: null,
                    #            i.e. the runner decides). Reported as /v1/models context_length
@@ -117,23 +118,42 @@ Generates a `llama-server` service for any standard GGUF model with ROCm acceler
 };
 ```
 
-#### `mkNpuModel` (`modules/npu/mkNpuModel.nix`)
-Generates an AMD Ryzen AI (XDNA 2) runner service. One process, one model, one port - the same
-engine shape as `mkGufo`, selected by `kind` (`genai` | `embeddings` | `asr` | `image-gen`):
+#### `mkOpenFlow` (`modules/npu/mkOpenFlow.nix`)
+Generates one OpenFlowLM (`oflm serve`) service per model on the XDNA 2 NPU. `kind` selects the
+engine mode: `"chat"` (default) serves `--host/--port/<tag>`, `"asr"` serves
+`--asr 1 --asrmodel <tag>` as a standalone transcription server:
 ```nix
-"llama-3.2-1b-npu" = mkNpuModel {
-  modelId = "llama-3.2-1b-npu";
-  remappedModel = "Llama-3.2-1B-Instruct_rai_1.9.0_npu";
-  description = "Llama 3.2 1B Instruct int4 on the Ryzen AI NPU - light chat alongside the GPU LLM";
-  kind = "genai";        # -> runners/genai_runner.py, capabilities [chat, completions]
-  port = 8083;
-};
+"llama3.2:1b" = mkOpenFlow { modelId = "llama3.2:1b"; port = 8083; };
+"whisper-v3:turbo" = mkOpenFlow { modelId = "whisper-v3:turbo"; port = 8087; kind = "asr"; };
 ```
-The weights directory is `services.npu.modelsDir/<modelId>`; it is checked in `ExecStartPre` so
-weights that are not installed fail in the journal with the missing path instead of hanging the
-gateway. Weights are host state - no unit or module in this repo downloads anything.
-`context` (optional) is the declared window: it is exported as `NPU_CONTEXT_LENGTH` and is what
-`/v1/models` reports as `context_length`.
+**The registry key MUST be the engine's own tag.** The router forwards request bodies verbatim,
+so whatever the client typed as `model` is what `oflm` matches; `remappedModel` cannot fix a
+mismatch because there is no body rewrite anywhere in the pipeline.
+
+Everything else about the entry comes from the engine's catalogue
+(`<openflowlm source>/src/model_list.json`), read at **eval** time through
+`services.npu.openflowlm.catalogue`:
+
+| field | source |
+| --- | --- |
+| `description` | catalogue `description` for that tag, unless the registry sets one |
+| `context` | catalogue `default_context_length` (`448` for Whisper is genuinely the window, not a placeholder) |
+| `modelDir` | `services.npu.openflowlm.modelStore/models/<catalogue name>` - e.g. `/srv/models/oflm/models/Llama-3.2-1B-NPU2` |
+| `capabilities` | `[chat completions]` for `chat`, `[audio-transcriptions]` for `asr` |
+
+An unknown `modelId` is an eval error listing the valid tags (chat tags and ASR tags apart), so
+a typo cannot ship as a unit that dies at start. `ExecStartPre` then checks the weights dir and
+names the missing download (`oflm pull <tag>`); host state is never fetched by this repo.
+Whisper is v3-turbo only because that is the family `oflm` actually serves - its catalogue also
+lists four BERT embedding sets (`all-minilm:l12-v2`, `all-minilm:l6-v2`, `bge-base-en-v1.5`,
+`bge-m2`) reachable with `kind = "embeddings"`, none of which the registry uses yet.
+
+#### `mkNpuModel` (`modules/npu/mkNpuModel.nix`) - legacy ONNX runners
+Still implemented, no longer used by `models/npu.nix`. It runs the Python runners in
+`modules/npu/runners/` against AMD's proprietary Ryzen AI wheels (`ryzen-ai.nix`): `kind =
+"genai" | "embeddings" | "asr" | "image-gen"`, weights under `services.npu.modelsDir/<modelId>`.
+It stays because the VitisAI/ONNX path is the only one that can host a *closed* AMD artifact,
+and because the OpenAI-compatible runners were the proof that the NPU domain works end to end.
 
 #### `mkKyojin` (`modules/kyojin/mkKyojin.nix`)
 Generates an ExLlamaV3/Kyojin inference service running native ROCm on gfx1151:
@@ -161,12 +181,12 @@ Registry keys are canonical: `wantedBy`/dashboard lookups match on `modelId`, ne
 Everything is keyed by **device domain** - `gpu` and `npu` never share a lock, a state file, or
 a conflict set:
 
-| | GPU domain | NPU domain |
-| --- | --- | --- |
-| Lock file | `/run/model-lock/gpu.lock` | `/run/model-lock/npu.lock` |
-| State file | `/run/model-lock/active_gpu` | `/run/model-lock/active_npu` |
-| Unit set | `gpuExclusiveUnits` | `npuExclusiveUnits` |
-| systemd `Conflicts=` | within the GPU set only | within the NPU set only |
+|                      | GPU domain                   | NPU domain                   |
+| -------------------- | ---------------------------- | ---------------------------- |
+| Lock file            | `/run/model-lock/gpu.lock`   | `/run/model-lock/npu.lock`   |
+| State file           | `/run/model-lock/active_gpu` | `/run/model-lock/active_npu` |
+| Unit set             | `gpuExclusiveUnits`          | `npuExclusiveUnits`          |
+| systemd `Conflicts=` | within the GPU set only      | within the NPU set only      |
 
 Permissions: created at boot by `systemd.tmpfiles.rules` (`0777 root root`). There are no
 legacy `model.lock` / `active_model` symlinks - an `os.path.exists()` check on a dangling
@@ -185,6 +205,28 @@ compat link is a false positive waiting to happen.
 
 Because a request only ever touches its own domain's lock, an NPU switch never queues behind a
 GPU model load, and the stop script cannot evict across domains by accident.
+
+### Three rules the state machine depends on
+
+Every one of these has already been broken once in production, silently:
+
+1. **The unload finishes before the load starts.** `systemctl stop` in `stop-other-workloads` is
+   one transaction for the whole domain and it *blocks* (until `TimeoutStopSec`, then SIGKILL).
+   `Conflicts=` is not a substitute: its eviction is asynchronous and `Type=simple` makes
+   `systemctl start` return as soon as the process is forked, so the new model begins `hipMalloc`
+   against a domain that still holds 100 GB and dies seconds later. The script therefore also
+   resets the target's start-rate limit, and the router treats a non-zero exit as "do not start".
+2. **Absolute binaries in orchestration scripts.** The switcher unit's `PATH` contains neither
+   `sudo` nor `systemctl`; a bare `sudo` in a helper resolves to nothing, exits 127, and if stderr
+   is redirected to `/dev/null` inside an `if`, the script exits 0 having done nothing at all.
+   Helper scripts name `/nix/store/...systemctl` and `/run/wrappers/bin/sudo`, and escalate only
+   when `EUID` is not 0 (the router calls them through sudo, the wake scripts as their own user).
+3. **Claiming a state file cannot fail.** `active_<device>` is written by every workload user
+   (gufo, llama-cpp, kyojin, npu, gateway), so `echo <id> > file && chmod 666 file` hits `EPERM`
+   on `chmod` - or even on the redirect - whenever the previous owner was a different engine, and
+   a failing `ExecStartPre` aborts the unit *after* the file already names it. All units claim it
+   through `services.workload-manager.claimStateScript`, which unlinks and recreates (the same
+   move as `dash.py:set_state_file` and the router's `write_active`).
 
 ---
 
@@ -216,19 +258,24 @@ One resident process replaces eight preforked fastcgiwrap workers plus a `bash`+
 cascade per request. See `modules/switcher/README.md` for the design rationale; the contract in
 brief:
 
-| aspect | behaviour |
-| --- | --- |
-| transport | nginx `proxy_pass` -> Unix socket `/run/switcher/switcher.sock` (mode `0660`, group `gateway`); `--listen tcp:HOST:PORT` also exists for development |
-| model resolution | `?model=` query, then `X-Model` header, then the body's top-level `model` field (JSON / multipart / form-urlencoded), then the registry `@default` |
-| registry | tab-separated file generated at eval time by `modules/switcher/registry.nix` - no JSON parser in the hot path; `\`, TAB, CR, LF are escaped so no field can forge a boundary |
-| residency | reads `/run/model-lock/active_<device>`, otherwise takes `<device>.lock` via `flock(2)`, runs `stop-other-workloads <device> <unit>`, starts the unit, polls health |
-| lock order | every domain a model declares, acquired in `Device::LOCK_ORDER` (`gpu` then `npu`) - same rule as §3 |
-| body limits | `--max-body` (default 512 MiB) bounds buffering; over-limit is `413`, not OOM |
-| capability guard | a request whose route the model does not declare (e.g. `/v1/embeddings` on a chat-only model) gets `400` naming both the route and the declared set |
-| streaming | `Transfer-Encoding: chunked` is forwarded verbatim, never re-framed; SSE reaches the client incrementally. nginx keeps `proxy_buffering off` |
-| connection reuse | per-backend keep-alive pool (8 idle sockets, 20 s TTL), dropped when a workload is stopped |
-| concurrency | one thread per connection, 256 KiB stacks, `--worker-max` (default 512) admitted before spawn so overload answers `503` |
-| idle cost | blocked in `accept()`; measured **0.00 %** of one core while idle |
+| aspect           | behaviour                                                                                                                                                                    |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| transport        | nginx `proxy_pass` -> Unix socket `/run/switcher/switcher.sock` (mode `0660`, group `gateway`); `--listen tcp:HOST:PORT` also exists for development                         |
+| model resolution | `?model=` query, then `X-Model` header, then the body's top-level `model` field (JSON / multipart / form-urlencoded), then the registry `@default`                           |
+| registry         | tab-separated file generated at eval time by `modules/switcher/registry.nix` - no JSON parser in the hot path; `\`, TAB, CR, LF are escaped so no field can forge a boundary |
+| residency        | reads `/run/model-lock/active_<device>`, otherwise takes `<device>.lock` via `flock(2)`, runs `stop-other-workloads <device> <unit>`, starts the unit, polls health          |
+
+Every failed load is one `eprintln!` in the journal (the status alone told the client something
+went wrong and left no trace for the operator), and a refused connection on a workload the state
+file swears is resident - the fingerprint of a start that failed after its `ExecStartPre` claim -
+is recovered with one forced `systemctl restart` plus a replay, because nothing has been written
+to the client at that point.
+| lock order       | every domain a model declares, acquired in `Device::LOCK_ORDER` (`gpu` then `npu`) - same rule as §3                                                                         |
+| body limits      | `--max-body` (default 512 MiB) bounds buffering; over-limit is `413`, not OOM                                                                                                |
+| streaming        | `Transfer-Encoding: chunked` is forwarded verbatim, never re-framed; SSE reaches the client incrementally. nginx keeps `proxy_buffering off`                                 |
+| connection reuse | per-backend keep-alive pool (8 idle sockets, 20 s TTL), dropped when a workload is stopped                                                                                   |
+| concurrency      | one thread per connection, 256 KiB stacks, `--worker-max` (default 512) admitted before spawn so overload answers `503`                                                      |
+| idle cost        | blocked in `accept()`; measured **0.00 %** of one core while idle                                                                                                            |
 
 Dependency policy: the crate has **zero** Cargo dependencies (only `std`; `flock` is hand-written
 FFI in `src/ffi.rs`). That is why `cargoHash` pins an empty vendor tree and the build never needs
@@ -239,12 +286,12 @@ the network.
 The two domains are reported and controlled separately - nothing in the API implies a single
 "active model" anymore:
 
-| field / route | meaning |
-| --- | --- |
-| `active_gpu_model` | model loaded on the iGPU (from `/run/model-lock/active_gpu`), `null` when idle |
-| `active_npu_model` | model loaded on the XDNA 2 NPU (from `/run/model-lock/active_npu`), `null` when idle |
-| `POST /api/switch {model}` | domain is derived from the model itself - the client never picks a lock |
-| `POST /api/stop {device}` | unload **one** domain; `device` is explicit so the dashboard can never evict the other side |
+| field / route              | meaning                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------- |
+| `active_gpu_model`         | model loaded on the iGPU (from `/run/model-lock/active_gpu`), `null` when idle              |
+| `active_npu_model`         | model loaded on the XDNA 2 NPU (from `/run/model-lock/active_npu`), `null` when idle        |
+| `POST /api/switch {model}` | domain is derived from the model itself - the client never picks a lock                     |
+| `POST /api/stop {device}`  | unload **one** domain; `device` is explicit so the dashboard can never evict the other side |
 
 Deciding *"is this model loaded?"* is a client-side join: compare a `/v1/models` entry `id`
 against `active_gpu_model` / `active_npu_model` of its own domain.
@@ -252,14 +299,14 @@ against `active_gpu_model` / `active_npu_model` of its own domain.
 Every `/v1/models` `data[]` object is one registry entry, `id` being the registry key (the
 runners expose no `/v1/models` of their own - one process, one model):
 
-| field | source / meaning |
-| --- | --- |
-| `device` | `"gpu"` or `"npu"` - which domain the model belongs to |
-| `backend` | engine identifier (`gufo`, `llama-cpp`, `kyojin`, `npu-genai`, …) |
+| field            | source / meaning                                                            |
+| ---------------- | --------------------------------------------------------------------------- |
+| `device`         | `"gpu"` or `"npu"` - which domain the model belongs to                      |
+| `backend`        | engine identifier (`gufo`, `llama-cpp`, `kyojin`, `npu-genai`, …)           |
 | `context_length` | declared per-session context window in tokens, `null` when the runner picks |
-| `sessions` | concurrent slots the runner was started with |
-| `description` | human-readable one-liner for the dashboard |
-| `capabilities` | routes the runner serves (`chat`, `completions`, `embeddings`, …) |
+| `sessions`       | concurrent slots the runner was started with                                |
+| `description`    | human-readable one-liner for the dashboard                                  |
+| `capabilities`   | routes the runner serves (`chat`, `completions`, `embeddings`, …)           |
 
 ### Dashboard UI (`modules/dash/frontend/`)
 
@@ -330,7 +377,10 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
     ├── npu/
     │   ├── README.md           # NPU domain: packaging decisions, validated stack, AMD blockers
     │   ├── default.nix         # services.npu: user, accel device, runtime env, xrtDriver
-    │   ├── mkNpuModel.nix      # mkNpuModel helper implementing strict model contract
+    │   ├── mkNpuModel.nix      # Legacy Python-runner helper (same model contract)
+    │   ├── mkOpenFlow.nix      # mkOpenFlow helper: catalogue entry -> oflm serve unit
+    │   ├── openflow.nix        # services.npu.openflowlm: engine, kernel set, model store
+    │   ├── openflow-kernels.nix # Prebuilt xclbin set from the flake source (no kernel build)
     │   ├── packages/
     │   │   ├── ryzen-ai.nix    # AMD Ryzen AI 1.9.0 runtime as derivations (hash-pinned)
     │   │   ├── amdxdna-driver.nix  # XRT's out-of-tree amdxdna.ko (services.npu.xrtDriver)
@@ -373,9 +423,18 @@ Documentation for the libraries can be found at `https://daisyui.com/llms.txt` a
 
 ## 7. Driver and artifact constraints (NPU domain)
 
-Validated on this host (`llm`, kernel 7.2.9): LLM generation runs on the NPU (`59.3 tok/s` on
-Llama-3.2-1B int4), AMD's quicktest CNN executes on the NPU (`NPU kernel time: 3234 us`) with
-CPU-identical numerics, and the packaged runtime registers `VitisAIExecutionProvider`.
+Validated on this host (`llm`, kernel 7.2.9): `oflm` serves Llama-3.2-1B on the NPU at
+`61.9 tok/s` decode (`91.8 tok/s` prefill) and Whisper-V3-Turbo transcribes 11 s of audio in
+`2.4 s` at ~1 GB RSS with **no chat model loaded**. Earlier, on the legacy ONNX path: LLM
+generation ran on the NPU (`59.3 tok/s` on Llama-3.2-1B int4), AMD's quicktest CNN executed on
+the NPU (`NPU kernel time: 3234 us`) with CPU-identical numerics, and the packaged runtime
+registered `VitisAIExecutionProvider`.
+
+0. **The engine is OpenFlowLM (`services.npu.openflowlm`), not AMD's Python stack.** One
+   `oflm serve` process per registry entry, OpenAI-compatible natively, kernels taken prebuilt
+   from the flake source (`modules/npu/openflow-kernels.nix`) so no AIE toolchain enters the
+   system. Its dependency closure comes from `https://nix-amd-ai.cachix.org`, which is in
+   `modules/nix.nix` - without it a first build compiles XRT as well.
 
 1. **LLM/genai needs AMD's out-of-tree driver - solved by `services.npu.xrtDriver`.** With
    mainline's `amdxdna` every LLM session died in

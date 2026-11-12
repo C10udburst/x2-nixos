@@ -22,6 +22,12 @@
       "https://nix-community.cachix.org"
       "https://cache.nixos-cuda.org"
       "https://numtide.cachix.org"
+      # The NPU engine's dependency closure (XRT + amdxdna plugin, boost, the Rust tokenizer
+      # crates). The engine itself is not cached upstream, but its ~130-input closure is,
+      # which is the difference between a short engine compile and rebuilding XRT too.
+      # NOT a flake `nixConfig` entry on purpose: a substituter declared that way applies
+      # only to trusted users and is otherwise ignored in silence.
+      "https://nix-amd-ai.cachix.org"
       # "https://nixos-rocm.cachix.org"
     ];
 
@@ -30,6 +36,7 @@
       "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
       "cache.nixos-cuda.org:74DUi4Ye579gUqzH4ziL9IyiJBlDpMRn9MBN8oNan9M="
       "numtide.cachix.org-1:psk1bDfU1UhVfiVNyPCxyhR+FtmpNkamWT0DwIK+jic="
+      "nix-amd-ai.cachix.org-1:F4OU4vw/lV2oiG6SBHZ+nqjl4EFJuqI4X9A7pvaBmhQ="
       # "nixos-rocm.cachix.org-1:VEpsf7pRIijjd8csKjFNBGzkBqOmw8H9PRmgAq14LnE="
     ];
 

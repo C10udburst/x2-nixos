@@ -209,7 +209,8 @@ in
       ];
 
       ExecStartPre = [
-        "/bin/sh -c '${pkgs.coreutils}/bin/mkdir -p /var/lib/kyojin/tmp && ${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_gpu && (${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_gpu 2>/dev/null || true)'"
+        "/bin/sh -c '${pkgs.coreutils}/bin/mkdir -p /var/lib/kyojin/tmp'"
+        "${config.services.workload-manager.claimStateScript} gpu ${lib.escapeShellArg modelId}"
       ];
       ExecStart = "${launcher}";
       ExecStopPost = [

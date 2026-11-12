@@ -44,8 +44,12 @@ let
   };
 in
 {
-  # NOTE: ./mkNpuModel.nix is *not* a module - it is a plain factory called from
-  # models/npu.nix, exactly like ./../gufo/mkGufo.nix is called from models/gpu.nix.
+  imports = [ ./openflow.nix ];
+
+  # NOTE: ./mkNpuModel.nix and ./mkOpenFlow.nix are *not* modules - they are plain factories
+  # called from models/npu.nix, exactly like ./../gufo/mkGufo.nix is called from
+  # models/gpu.nix. ./openflow.nix (imported above) is the module that owns the engine
+  # package, the kernel package and the model store they read their defaults from.
 
   options.services.npu = {
     enable = lib.mkEnableOption "AMD Ryzen AI NPU inference domain";
@@ -127,8 +131,8 @@ in
     })
 
     {
-      # Users and groups exist unconditionally so mkNpuModel units can reference them,
-      # mirroring modules/gufo/default.nix and modules/kyojin/default.nix.
+      # Users and groups exist unconditionally so mkNpuModel/mkOpenFlow units can reference
+      # them, mirroring modules/gufo/default.nix and modules/kyojin/default.nix.
       #
       # There is deliberately no boot-time "is the NPU stack sane?" unit: the wheel environment
       # is validated in the derivations' check phases (packages/ryzen-ai.nix asserts that the

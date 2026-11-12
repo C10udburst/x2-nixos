@@ -37,7 +37,6 @@
   # userspace asks for (DRM_IOCTL_AMDXDNA_CREATE_BO err=-14), so build the driver AMD ships
   # inside XRT. Takes effect on the next reboot; `updates/amdxdna.ko` shadows the in-tree one.
   services.npu.xrtDriver = true;
-services.npu.extraPythonPackages = [ pkgs.python312.pkgs.tokenizers ];  # needed by runners/stt_runner.py (ASR)
 
   nixpkgs.overlays = [
     (final: prev: {

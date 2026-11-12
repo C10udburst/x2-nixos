@@ -16,7 +16,7 @@ use std::thread;
 use crate::config::{Config, Listen};
 use crate::http::Framing;
 use crate::pool::Pool;
-use crate::registry::Registry;
+use crate::registry::{Entry, Registry};
 use crate::stream::Stream;
 use crate::workload::{backend_addr as resolve_backend_addr, Workload};
 
@@ -127,24 +127,20 @@ fn serve_one_request(conn: &mut BufReader, router: &Router) -> io::Result<bool> 
         startup_timeout: cfg.startup_timeout,
     };
     if let Err(fail) = workload.ensure(entry, false) {
+        // Without this line the router is silent about every failed load: the client gets the
+        // status, the journal gets nothing, and a model that never started looks like a hang.
+        eprintln!(
+            "switcher: {} could not be made resident: {} ({} {})",
+            entry.id, fail.message, fail.status, fail.kind
+        );
         http::write_error(conn, fail.status, fail.kind, &fail.message)?;
         return Ok(false);
     }
 
-    // --- backend connection: pooled warm socket, or a fresh one -------------
+    // --- backend connection + request forwarding ----------------------------
     let backend_addr = resolve_backend_addr(entry)
         .map_err(|fail| io::Error::other(fail.message))?;
-    let mut backend = match router.pool.take(entry) {
-        Some(existing) => existing,
-        None => {
-            let tcp = TcpStream::connect_timeout(&backend_addr, cfg.connect_timeout)?;
-            Stream::Tcp(tcp)
-        }
-    };
-    backend.set_timeouts(cfg.backend_read, cfg.backend_write)?;
-    backend.set_nodelay()?;
 
-    // --- forward the request ------------------------------------------------
     // We always re-frame the body we already hold (`Content-Length`), which also covers a
     // chunked request whose framing we unwound while scanning it.
     let client_reuse_requested = !head.wants_close();
@@ -163,24 +159,48 @@ fn serve_one_request(conn: &mut BufReader, router: &Router) -> io::Result<bool> 
         client_reuse_requested,
     )?;
     out.extend_from_slice(&body);
-    backend.write_all(&out)?;
-    backend.flush()?;
 
-    // --- read the response head, forward it, then stream the body ----------
-    let mut resp_head_raw = Vec::with_capacity(1024);
-    let mut resp_prefix: Vec<u8> = Vec::new();
-    if !read_response_head(&mut backend, &mut resp_head_raw, &mut resp_prefix)? {
-        // Backend died without answering (it was likely just stopped by a workload switch).
-        // Do not poison the pool with it.
-        router.pool.evict(entry);
-        http::write_error(
-            conn,
-            502,
-            "bad_gateway",
-            &format!("Backend for model {} closed without responding", model_id),
-        )?;
-        return Ok(false);
+    let mut attempt = open_backend(router, entry, backend_addr, &out);
+    if let Err(err) = &attempt {
+        // A refused/closed connection on a workload the state file swears is resident means the
+        // state file lied (see `Workload::claims_but_dead`). Recovering is the difference
+        // between one failed request and a domain that answers 502 until somebody restarts the
+        // unit by hand, so: drop the poisoned socket, force-start the unit, replay once. Only
+        // legal because nothing has been written to the client yet.
+        if is_stale_connection(err) && workload.claims_but_dead(entry) {
+            eprintln!(
+                "switcher: {} is not reachable ({}) and its unit is not running; restarting {}",
+                entry.id, err, entry.service
+            );
+            router.pool.evict(entry);
+            if let Err(fail) = workload.ensure(entry, true) {
+                eprintln!(
+                    "switcher: {} could not be recovered: {} ({} {})",
+                    entry.id, fail.message, fail.status, fail.kind
+                );
+                http::write_error(conn, fail.status, fail.kind, &fail.message)?;
+                return Ok(false);
+            }
+            attempt = open_backend(router, entry, backend_addr, &out);
+        }
     }
+    let (mut backend, resp_head_raw, mut resp_prefix) = match attempt {
+        Ok(exchange) => exchange,
+        Err(err) => {
+            // Backend died without answering (it was likely just stopped by a workload switch).
+            // Do not poison the pool with it.
+            router.pool.evict(entry);
+            http::write_error(
+                conn,
+                502,
+                "bad_gateway",
+                &format!("Backend for model {} is not reachable: {err}", model_id),
+            )?;
+            return Ok(false);
+        }
+    };
+
+    // --- forward the response head, then stream the body ----------
     let resp_head = match http::parse_head(&resp_head_raw) {
         Ok(Some(head)) => head,
         _ => {
@@ -656,6 +676,68 @@ impl Read for BufReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.stream.read(buf)
     }
+}
+
+/// Send one request to `entry` and read its response head.
+///
+/// Kept separate from the relay so the caller can retry the exchange: nothing is written to the
+/// client before this returns, which is what makes a second attempt legal.
+///
+/// A pooled socket that the backend closed between requests is *not* a workload failure, so the
+/// write is retried on a fresh socket instead of bubbling the error up as a restart candidate.
+fn open_backend(
+    router: &Router,
+    entry: &Entry,
+    addr: std::net::SocketAddr,
+    request: &[u8],
+) -> io::Result<(Stream, Vec<u8>, Vec<u8>)> {
+    let cfg = &router.config;
+    if let Some(mut pooled) = router.pool.take(entry) {
+        pooled.set_timeouts(cfg.backend_read, cfg.backend_write)?;
+        pooled.set_nodelay()?;
+        if pooled.write_all(request).and_then(|_| pooled.flush()).is_ok() {
+            match read_head(&mut pooled) {
+                Ok(head_and_prefix) => return Ok((pooled, head_and_prefix.0, head_and_prefix.1)),
+                // The socket was already gone: fall through and open a new one.
+                Err(_) => {}
+            }
+        }
+    }
+
+    let mut backend = Stream::Tcp(TcpStream::connect_timeout(&addr, cfg.connect_timeout)?);
+    backend.set_timeouts(cfg.backend_read, cfg.backend_write)?;
+    backend.set_nodelay()?;
+    backend.write_all(request)?;
+    backend.flush()?;
+    let (head_raw, prefix) = read_head(&mut backend)?;
+    Ok((backend, head_raw, prefix))
+}
+
+/// Read one response head, turning "peer closed before answering" into an error the caller can
+/// classify instead of a silent empty response.
+fn read_head(stream: &mut Stream) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    let mut head_raw = Vec::with_capacity(1024);
+    let mut prefix: Vec<u8> = Vec::new();
+    if !read_response_head(stream, &mut head_raw, &mut prefix)? {
+        return Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "backend closed the connection without responding",
+        ));
+    }
+    Ok((head_raw, prefix))
+}
+
+/// Connection-level failures: the workload was not there to accept the request. Anything else
+/// (timeouts, protocol errors, a client that hung up) must never trigger a workload restart.
+fn is_stale_connection(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+    )
 }
 
 /// Read an HTTP response head from the backend into `head_out`, returning any body bytes that

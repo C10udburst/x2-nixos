@@ -19,6 +19,26 @@
       url = "github:Yamz-Labs/kyojin";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The NPU domain's engine: open NPU kernels + `oflm serve` for Ryzen AI (XDNA 2).
+    #
+    # `nixpkgs` deliberately does NOT follow here, unlike every other input. This flake
+    # builds against its own pinned nixpkgs (and pulls nix-amd-ai's XRT + amdxdna plugin
+    # through the same pin); following ours would re-hash that whole closure and lose every
+    # prebuilt xrt/boost/rust artifact the upstream binary cache carries. A second nixpkgs
+    # in the graph is the cheaper answer by a wide margin.
+    #
+    # Pinned as the GitHub archive URL rather than `github:`. The repository carries an
+    # uninitialized gitlink (`third_party/tokenizers-cpp`), and the git fetcher normalizes
+    # that empty directory differently across nix patch releases: the identical rev hashed to
+    # two different NARs on the two machines used here, so a `github:` pin resolved on one
+    # host refused to download on the other. A plain archive has no git metadata and hashes
+    # the same everywhere. Updating is still a one-liner (`nix flake lock
+    # --update-input openflowlm` rewrites the rev inside the URL only if you change it here,
+    # so bump the rev by hand and refresh narHash). The engine never needs the submodule:
+    # its package.nix deletes `third_party/tokenizers-cpp` and fetches its own tokenizer tree.
+    openflowlm = {
+      url = "https://github.com/Atomic-Germ/OpenFlowLM-Next/archive/96b915d42d216e2a545db746fbd0d7387bed3157.tar.gz";
+    };
   };
 
   outputs =
@@ -65,13 +85,25 @@
         '';
       };
 
-      # The router as a standalone package, so `nix build .#switcher` works without deploying.
-      # It is the same derivation `modules/switcher/service.nix` puts in ExecStart.
+      # Standalone packages, so they can be built or inspected without deploying. Each is
+      # the very derivation the corresponding module puts in ExecStart.
       packages = nixpkgs.lib.genAttrs [ "x86_64-linux" ] (system: {
         switcher = import ./modules/switcher/default.nix {
           lib = nixpkgs.lib;
           rustPlatform = nixpkgs.legacyPackages.${system}.rustPlatform;
         };
+
+        # `nix build .#openflowlm` - the NPU engine with the repository's prebuilt xclbins,
+        # i.e. without the mlir-aie/Peano kernel toolchain. `nix build .#openflowlm-full`
+        # builds the open kernels from source instead (long, and the BERT embedding sets in
+        # it need an NPU plus `__noChroot`).
+        openflowlm = inputs.openflowlm.packages.${system}.oflm.override {
+          openflowlm-open-kernels = import ./modules/npu/openflow-kernels.nix {
+            inherit pkgs;
+            source = "${inputs.openflowlm}";
+          };
+        };
+        openflowlm-full = inputs.openflowlm.packages.${system}.oflm;
       });
 
       nixosConfigurations = {

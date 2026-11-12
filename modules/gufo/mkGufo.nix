@@ -167,7 +167,10 @@ in {
       ];
 
       ExecStartPre = [
-        "/bin/sh -c '${pkgs.coreutils}/bin/echo ${lib.escapeShellArg modelId} > /run/model-lock/active_gpu && ${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_gpu'"
+        # Claim the GPU domain (unlink + recreate, so a state file left behind by another engine
+        # user can never fail this unit: chmod by a non-owner is EPERM and a failed ExecStartPre
+        # aborts the start before ExecStart).
+        "${config.services.workload-manager.claimStateScript} gpu ${lib.escapeShellArg modelId}"
       ];
       ExecStart = "${launcher}";
       ExecStopPost = [

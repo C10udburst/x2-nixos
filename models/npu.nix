@@ -1,16 +1,27 @@
-# NPU domain model registry (AMD XDNA 2 / Ryzen AI).
+# NPU domain model registry (AMD XDNA 2 / Ryzen AI), served by OpenFlowLM.
 #
 # Raw declarations only - see ./gpu.nix for the same idea on the iGPU side and
 # ../modules/models.nix for the schema, the factories and the orchestration.
 #
-# The whole block is conditional on `services.npu.enable`: with the Ryzen AI runtime off the
-# registry must still evaluate and build as a GPU-only system (no /dev/accel rules, no NPU
-# units, nothing referencing the packaged runtime). Rule 1 is enforced per domain, so these
-# entries coexist with a warm GPU model and never join the GPU conflict set.
+# The engine is OpenFlowLM (`oflm serve`), so an entry is a *tag*, not a weights path:
+# `mkOpenFlow` looks the tag up in the engine's own catalogue at eval time to get the
+# directory name and the context window, and the weights themselves are host state under
+# `services.npu.openflowlm.modelStore`. Nothing here downloads anything - a model that is
+# not in place fails in `ExecStartPre` with the pull command to run. Place weights once:
+#
+#     sudo -u npu env OFLM_MODEL_PATH=/srv/models/oflm HOME=/var/lib/oflm \
+#          oflm pull llama3.2:1b
+#
+# Why the registry key is the tag: the router resolves `model` from the request and
+# forwards the body untouched, so the name that reaches `oflm` has to be one it resolves
+# (`llama3.2:1b`, `whisper-v3:turbo`). A prettier key would 404 at the backend.
+#
+# Rule 1 is still enforced per domain: these entries join `npuExclusiveUnits` and evict
+# each other, never a warm GPU model.
 {
   config,
   lib,
-  mkNpuModel,
+  mkOpenFlow,
   ...
 }:
 let
@@ -19,45 +30,53 @@ in
 {
   config = lib.mkIf npuEnabled.enable {
     services.models = {
-      # 14. Llama 3.2 1B Instruct on the XDNA 2 NPU (OGA / genai runtime, int4)
-      #     Artifact: amd/Llama-3.2-1B-Instruct_rai_1.9.0_npu (ungated, 2.0 GB), installed by
-      #     hand into /srv/models/llama-3.2-1b-npu. Weights are host state: no unit downloads.
-      "llama-3.2-1b-npu" = mkNpuModel {
-        modelId = "llama-3.2-1b-npu";
-        remappedModel = "Llama-3.2-1B-Instruct_rai_1.9.0_npu";
-        description = "Llama 3.2 1B Instruct int4 on the Ryzen AI NPU - light chat alongside the GPU LLM";
+      # 14. Llama 3.2 1B Instruct on the XDNA 2 NPU (Q4_1, `Llama-3.2-1B-NPU2`).
+      #     The catalogue declares 131072 context; 8192 is what this host actually runs, so
+      #     the KV cache stays next to a warm GPU model instead of eating unified memory.
+      "llama3.2:1b" = mkOpenFlow {
+        modelId = "llama3.2:1b";
+        description = "Llama 3.2 1B Instruct Q4_1 on the Ryzen AI NPU via OpenFlowLM - light chat alongside the GPU LLM";
         port = 8083;
-        kind = "genai";
-        # Exported as NPU_CONTEXT_LENGTH: the declared window is what /v1/models reports and
-        # what the dashboard's context filter sorts by (the runner would otherwise read
-        # context_length from the artifact's genai_config.json).
         context = 8192;
       };
 
-      # 15. EmbeddingGemma 300M on the NPU - NOT REGISTERED: the only artifact AMD publishes
-      #     (amd/embeddinggemma-300m_npu_rai_1.8.0_npu_4K) references a custom op that no
-      #     Ryzen AI 1.8/1.9 runtime registers, so the session cannot even be created:
-      #     "com.ryzenai:CastAvx(-1) is not a registered function/op"
-      #     (https://github.com/amd/RyzenAI-SW/issues/387, verified on this host).
-      #     The runner is ready - re-enable this entry when AMD ships a fixed artifact.
-      #
-      # "embeddinggemma-300m" = mkNpuModel {
-      #   modelId = "embeddinggemma-300m";
-      #   description = "EmbeddingGemma 300M (ONNX int4, Ryzen AI NPU) - text embeddings";
-      #   port = 8084;
-      #   kind = "embeddings";
-      # };
+      # 15. Llama 3.2 3B Instruct (Q4_1, ~2.7 GB footprint). Same tag family, so a client
+      #     can ask for either by name and the router picks the unit - which means two
+      #     units, two ports, and one NPU: switching one in evicts the other.
+      "llama3.2:3b" = mkOpenFlow {
+        modelId = "llama3.2:3b";
+        description = "Llama 3.2 3B Instruct Q4_1 on the Ryzen AI NPU via OpenFlowLM";
+        port = 8084;
+        context = 8192;
+      };
 
-      # 16. Whisper-small on the NPU (ASR / speech-to-text)
-      #     Artifact: amd/whisper-small-onnx-npu (ungated, 970 MB encoder + 617 MB decoder)
-      #     Pre-compiled by AMD with static shapes for seq_len, fully VitisAI EP compatible.
-      #     Verified on this host: encoder builds + loads in 134 s, produces 10.9 MB .rai cache.
-      "whisper-small-onnx-npu" = mkNpuModel {
-        modelId = "whisper-small-onnx-npu";
-        description = "Whisper-small ONNX on the Ryzen AI NPU - ASR / speech-to-text";
+      # 16. Whisper large-v3 turbo as a standalone ASR server (`--asr 1` with no chat tag:
+      #     `serve` loads no LLM, and POST /v1/audio/transcriptions answers on its own).
+      #     Context is fixed at 448 tokens / 30 s windows by the architecture, so there is
+      #     nothing to pass and the catalogue's value is only reported to /v1/models.
+      "whisper-v3:turbo" = mkOpenFlow {
+        modelId = "whisper-v3:turbo";
+        description = "Whisper large-v3 turbo on the Ryzen AI NPU via OpenFlowLM - ASR / speech-to-text";
         port = 8087;
         kind = "asr";
       };
+
+      # 17. EmbeddingGemma 300M as a standalone encoder server (`--embed 1` with no chat tag).
+      #     Measured on this host: 768-dim vectors, ~0.7 s for a two-sentence batch, and the
+      #     open embedding kernel came up with 6 of its 7 NPU matmul shapes - the 2048x3072x768
+      #     one is refused by the driver (`CREATE_HWCTX … err=-22`), so the longest bucket runs
+      #     elsewhere. It answers, which is more than AMD's ONNX artifact ever did here.
+      #     Port 8088; 8085 is the iGPU's kyojin, not free.
+      "embed-gemma:300m" = mkOpenFlow {
+        modelId = "embed-gemma:300m";
+        description = "EmbeddingGemma 300M on the Ryzen AI NPU via OpenFlowLM - 768-dim text embeddings";
+        port = 8088;
+        kind = "embeddings";
+      };
+
+      # The four BERT sets (`all-minilm:l12-v2`, `all-minilm:l6-v2`, `bge-base:en-v1.5`,
+      # `bge-large:en-v1.5`) take the same `kind = "embeddings"` shape whenever they are
+      # wanted; they need their own weights pull, nothing here changes.
     };
   };
 }

@@ -240,6 +240,14 @@ impl Runner {
         self.run(&["start", unit]).map(|_| ())
     }
 
+    /// `ActiveState` of a unit (`activating`, `active`, `failed`, `inactive`, ...). Empty when
+    /// systemd could not be asked at all, which the caller treats as "unknown, keep waiting".
+    pub fn active_state(&self, unit: &str) -> String {
+        self.run(&["show", "-p", "ActiveState", "--value", unit])
+            .map(|state| state.trim().to_string())
+            .unwrap_or_default()
+    }
+
     /// Only used to recover from a state file that claimed a workload was resident while its
     /// socket was dead (SIGKILL, OOM, a crash that skipped `ExecStopPost`).
     pub fn restart(&self, unit: &str) -> Result<(), Fail> {
@@ -247,11 +255,17 @@ impl Runner {
     }
 
     /// Stop every *other* workload of one domain using the eval-time generated script, which
-    /// holds the authoritative per-domain unit list. Failure is logged, not fatal: the units
-    /// also carry systemd `Conflicts=`, so `start` below evicts them anyway.
-    pub fn stop_other_workloads(&self, device: Device, target_unit: &str) {
+    /// holds the authoritative per-domain unit list.
+    ///
+    /// This **must** succeed before anything is started. `Conflicts=` alone is not enough: the
+    /// eviction it triggers is asynchronous, and `Type=simple` makes `systemctl start` return as
+    /// soon as the new process is forked - so the new model begins `hipMalloc`ing while the old
+    /// one still holds 100 GB of the unified pool and dies on `hipMalloc failed` seconds later.
+    /// `systemctl stop` inside the script blocks until the conflicting units are really gone
+    /// (up to their `TimeoutStopSec`, then SIGKILL), which is the point of paying for it.
+    pub fn stop_other_workloads(&self, device: Device, target_unit: &str) -> Result<(), Fail> {
         let Some(script) = &self.stop_script else {
-            return;
+            return Ok(());
         };
         let mut cmd = match &self.sudo {
             Some(sudo) => {
@@ -263,16 +277,26 @@ impl Runner {
         };
         cmd.arg(device.as_str()).arg(target_unit);
         cmd.stdin(Stdio::null());
-        match cmd.output() {
-            Ok(out) if out.status.success() => {}
-            Ok(out) => eprintln!(
-                "switcher: stop-other-workloads {} {} -> {}",
-                device,
-                target_unit,
-                one_line(&String::from_utf8_lossy(&out.stderr))
-            ),
-            Err(err) => eprintln!("switcher: cannot run stop-other-workloads: {err}"),
+        let output = cmd.output().map_err(|err| {
+            Fail::new(
+                500,
+                "server_error",
+                format!("cannot run stop-other-workloads: {err}"),
+            )
+        })?;
+        if output.status.success() {
+            return Ok(());
         }
+        // Loud on purpose: a workload that refuses to die means the next one would OOM.
+        Err(Fail::new(
+            500,
+            "server_error",
+            format!(
+                "could not unload the other {} workloads: {}",
+                device,
+                one_line(&String::from_utf8_lossy(&output.stderr))
+            ),
+        ))
     }
 }
 
@@ -362,6 +386,19 @@ impl Workload {
             .all(|device| read_active(&self.paths, *device).as_deref() == Some(entry.id.as_str()))
     }
 
+    /// The state file names `entry`, but systemd says its unit is not running - the state file
+    /// lied. Every model unit claims its domain in `ExecStartPre`, so a start that fails after
+    /// the claim (bad weights, `hipMalloc` OOM because the previous workload was not gone yet)
+    /// leaves the domain pointing at a process that does not exist, and the resident fast path
+    /// would then answer every request with a refused connection forever.
+    ///
+    /// An unreadable state is reported as "not dead": guessing here would restart a healthy
+    /// 100 GB model.
+    pub fn claims_but_dead(&self, entry: &Entry) -> bool {
+        let state = self.runner.active_state(&entry.service);
+        !state.is_empty() && !matches!(state.as_str(), "active" | "activating" | "reloading")
+    }
+
     /// Make `entry` the resident workload, returning whether anything was actually started.
     ///
     /// `force` skips the resident fast path and restarts the unit: it is the recovery move for
@@ -395,9 +432,10 @@ impl Workload {
             ));
         }
 
-        // Rule 1, per domain: stop the other workloads of every domain this model joins.
+        // Rule 1, per domain: stop the other workloads of every domain this model joins, and
+        // wait for it. Starting on top of a workload that is still resident is a guaranteed OOM.
         for device in &entry.devices {
-            self.runner.stop_other_workloads(*device, &entry.service);
+            self.runner.stop_other_workloads(*device, &entry.service)?;
         }
 
         let started_at = Instant::now();
@@ -410,9 +448,27 @@ impl Workload {
         let addr = backend_addr(entry)?;
         let mut delay = Duration::from_millis(25);
         let deadline = Instant::now() + self.startup_timeout;
+        let mut last_unit_check = Instant::now();
         loop {
             if probe(addr, &self.health_paths, Duration::from_millis(1500)) {
                 break;
+            }
+            // A unit that already went to `failed` will never answer - a model that could not
+            // allocate is the common case here. Say so immediately instead of letting the client
+            // wait out the full startup timeout for a process that is gone.
+            if last_unit_check.elapsed() >= Duration::from_secs(2) {
+                last_unit_check = Instant::now();
+                let state = self.runner.active_state(&entry.service);
+                if matches!(state.as_str(), "failed" | "inactive" | "deactivating") {
+                    return Err(Fail::new(
+                        502,
+                        "bad_gateway",
+                        format!(
+                            "{} is {} immediately after starting: the load failed - see `journalctl -u {}`",
+                            entry.service, state, entry.service
+                        ),
+                    ));
+                }
             }
             if Instant::now() >= deadline {
                 return Err(Fail::new(

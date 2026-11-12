@@ -194,7 +194,7 @@ in {
         ];
 
         ExecStartPre = [
-          "/bin/sh -c '${pkgs.coreutils}/bin/echo comfyui > /run/model-lock/active_gpu && ${pkgs.coreutils}/bin/chmod 666 /run/model-lock/active_gpu'"
+          "${config.services.workload-manager.claimStateScript} gpu comfyui"
         ];
         ExecStart = "${launcher}";
         ExecStopPost = [
