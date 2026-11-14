@@ -74,6 +74,20 @@ in
         kind = "embeddings";
       };
 
+      "gemma4-it:e2b" = mkOpenFlow {
+        modelId = "gemma4-it:e2b";
+        description = "Gemma 4 IT e2b on the Ryzen AI NPU via OpenFlowLM - pareto optimal chat/tool calling model";
+        port = 8089;
+        context = 32768;
+      };
+
+      "nanbeige4.1:3b" = mkOpenFlow {
+        modelId = "nanbeige4.1:3b";
+        description = "NanBeige 4.1 3B on the Ryzen AI NPU via OpenFlowLM - pareto optimal chat/tool calling model";
+        port = 8090;
+        context = 32768;
+      };
+
       # The four BERT sets (`all-minilm:l12-v2`, `all-minilm:l6-v2`, `bge-base:en-v1.5`,
       # `bge-large:en-v1.5`) take the same `kind = "embeddings"` shape whenever they are
       # wanted; they need their own weights pull, nothing here changes.
