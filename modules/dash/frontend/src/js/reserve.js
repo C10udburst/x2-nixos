@@ -191,13 +191,14 @@ function renderLiveView(state) {
   const queueBanner = document.getElementById("queue-status-banner");
 
   if (active) {
-    const isRecurring = active.mode === "recurring";
-    if (isRecurring) {
-      setText(liveBadge, "Scheduled Slot");
+    const isOneTime = active.mode === "one_time";
+    if (isOneTime || active.mode === "recurring") {
+      setText(liveBadge, isOneTime ? "One-Time Slot" : "Scheduled Slot");
       liveBadge.className = "badge badge-primary font-semibold uppercase text-xs";
-      setText(liveModeBadge, "Recurring");
-      setText(holderTitle, active.title || "Scheduled Daily Window");
-      setText(holderDesc, `Reserved for ${active.client_name} • ${active.start_time} - ${active.end_time}`);
+      setText(liveModeBadge, isOneTime ? "One-Time" : "Recurring");
+      setText(holderTitle, active.title || (isOneTime ? "Scheduled One-Time Window" : "Scheduled Daily Window"));
+      const when = isOneTime && active.target_date ? `${active.target_date} ` : "";
+      setText(holderDesc, `Reserved for ${active.client_name} • ${when}${active.start_time} - ${active.end_time}`);
     } else {
       setText(liveBadge, "Reserved");
       liveBadge.className = "badge badge-warning font-semibold uppercase text-xs";
@@ -307,6 +308,13 @@ function renderCalendarView(state) {
   const now = new Date(state.server_time * 1000);
   const curWeekday = (now.getDay() + 6) % 7; // Mon=0 .. Sun=6
 
+  // Current-week bounds: one-time slots render only when they fall in this week
+  const weekMonday = new Date(now);
+  weekMonday.setHours(0, 0, 0, 0);
+  weekMonday.setDate(weekMonday.getDate() - curWeekday);
+  const weekEnd = new Date(weekMonday);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+
   // Header row: 1 fixed Time column + 7 equal day columns
   let html = `
     <div class="flex border-b border-base-300 bg-base-300/60 font-mono text-xs select-none">
@@ -361,10 +369,18 @@ function renderCalendarView(state) {
       `;
     }
 
-    // 3. Render recurring slots matching this day
+    // 3. Render scheduled slots matching this day (recurring + current-week one-time)
     for (const slot of state.schedule || []) {
-      const days = slot.days_of_week;
-      const isDayMatch = days === "*" || days.split(",").map((s) => s.trim()).includes(String(dayIdx));
+      const isSlotOneTime = slot.type === "one_time";
+      let isDayMatch;
+      if (isSlotOneTime) {
+        const [ty, tm, td] = slot.target_date.split("-").map(Number);
+        const slotDate = new Date(ty, tm - 1, td);
+        isDayMatch = slotDate >= weekMonday && slotDate < weekEnd && (slotDate.getDay() + 6) % 7 === dayIdx;
+      } else {
+        const days = slot.days_of_week;
+        isDayMatch = days === "*" || days.split(",").map((s) => s.trim()).includes(String(dayIdx));
+      }
       if (isDayMatch) {
         const [sh, sm] = slot.start_time.split(":").map(Number);
         const [eh, em] = slot.end_time.split(":").map(Number);
@@ -373,16 +389,23 @@ function renderCalendarView(state) {
         const durMin = endMin - startMin;
         const topPct = (startMin / 1440) * 100;
         const heightPct = Math.max(3.5, (durMin / 1440) * 100);
+        const colorCls = isSlotOneTime
+          ? "bg-secondary/20 border-secondary hover:bg-secondary/30"
+          : "bg-primary/20 border-primary hover:bg-primary/30";
+        const titleCls = isSlotOneTime ? "text-secondary" : "text-primary";
+        const timeCls = isSlotOneTime ? "text-secondary/80" : "text-primary/80";
+        const ownerCls = isSlotOneTime ? "text-secondary/70" : "text-primary/70";
+        const kindTag = isSlotOneTime ? "⚡ One-Time" : "Recurring";
 
         html += `
-          <div class="absolute left-1 right-1 rounded-md bg-primary/20 border-2 border-primary text-primary-content p-2 overflow-hidden shadow-md hover:z-30 hover:bg-primary/30 transition-all flex flex-col justify-between"
+          <div class="absolute left-1 right-1 rounded-md border-2 text-primary-content p-2 overflow-hidden shadow-md hover:z-30 transition-all flex flex-col justify-between ${colorCls}"
             style="top: ${topPct.toFixed(2)}%; height: ${heightPct.toFixed(2)}%;"
-            title="${escapeHtml(slot.title)} (${slot.start_time} - ${slot.end_time}) • By ${escapeHtml(slot.client_name)}">
+            title="${escapeHtml(slot.title)} (${isSlotOneTime ? slot.target_date + " " : ""}${slot.start_time} - ${slot.end_time}) • By ${escapeHtml(slot.client_name)}">
             <div class="flex flex-col overflow-hidden">
-              <span class="font-bold text-xs leading-tight text-primary truncate">${escapeHtml(slot.title)}</span>
-              <span class="font-mono text-[11px] text-primary/80 truncate">${slot.start_time} - ${slot.end_time}</span>
+              <span class="font-bold text-xs leading-tight ${titleCls} truncate">${escapeHtml(slot.title)}</span>
+              <span class="font-mono text-[11px] ${timeCls} truncate">${isSlotOneTime ? slot.target_date + " " : ""}${slot.start_time} - ${slot.end_time}</span>
             </div>
-            <span class="text-[10px] text-primary/70 truncate">Owner: ${escapeHtml(slot.client_name)}</span>
+            <span class="text-[10px] ${ownerCls} truncate">${kindTag} • ${escapeHtml(slot.client_name)}</span>
           </div>
         `;
       }
@@ -419,7 +442,7 @@ function renderCalendarView(state) {
   html += `</div></div>`;
   container.innerHTML = html;
 
-  // Render Recurring Schedule Table
+  // Render Combined Schedule Table (recurring + one-time)
   const table = document.getElementById("schedule-table");
   const tableEmpty = document.getElementById("schedule-table-empty");
   const tbody = document.getElementById("schedule-table-body");
@@ -433,22 +456,37 @@ function renderCalendarView(state) {
     if (tbody) {
       tbody.innerHTML = state.schedule
         .map((s) => {
-          let dayLabel = "Daily";
-          if (s.days_of_week === "0,1,2,3,4") dayLabel = "Mon-Fri";
-          else if (s.days_of_week !== "*") {
-            dayLabel = s.days_of_week
-              .split(",")
-              .map((d) => dayNames[Number(d.trim())])
-              .join(", ");
+          const isOneTime = s.type === "one_time";
+          let dayLabel;
+          if (isOneTime) {
+            const [ty, tm, td] = s.target_date.split("-").map(Number);
+            const d = new Date(ty, tm - 1, td);
+            dayLabel = `${dayNames[(d.getDay() + 6) % 7]} ${s.target_date}`;
+          } else {
+            dayLabel = "Daily";
+            if (s.days_of_week === "0,1,2,3,4") dayLabel = "Mon-Fri";
+            else if (s.days_of_week !== "*") {
+              dayLabel = s.days_of_week
+                .split(",")
+                .map((x) => dayNames[Number(x.trim())])
+                .join(", ");
+            }
           }
+          const typeBadge = isOneTime
+            ? '<span class="badge badge-secondary badge-xs">One-time</span>'
+            : '<span class="badge badge-primary badge-xs">Recurring</span>';
+          const deleteFn = isOneTime
+            ? `window.deleteOneTime(${s.id})`
+            : `window.deleteRecurring(${s.id})`;
           return `
             <tr class="hover:bg-base-300/40">
               <td class="font-bold text-base-content">${escapeHtml(s.title)}</td>
+              <td>${typeBadge}</td>
               <td><span class="badge badge-neutral badge-xs">${dayLabel}</span></td>
               <td>${s.start_time} - ${s.end_time}</td>
               <td class="text-primary">${escapeHtml(s.client_name)}</td>
               <td>
-                <button class="btn btn-ghost btn-xs text-error" onclick="window.deleteRecurring(${s.id})">Delete</button>
+                <button class="btn btn-ghost btn-xs text-error" onclick="${deleteFn}">Delete</button>
               </td>
             </tr>
           `;
@@ -522,19 +560,27 @@ function renderTimelineView(state) {
     currentOffsetSec += effDurSec;
   }
 
-  // 3. Upcoming Scheduled Locks (from recurring slots within next 24h)
+  // 3. Upcoming Scheduled Locks (recurring + one-time slots within next 24h)
   const nowDate = new Date(nowEpoch * 1000);
   for (const r of state.schedule || []) {
+    const isGanttOneTime = r.type === "one_time";
     // Check if slot falls in next 24 hours
     const [sh, sm] = r.start_time.split(":").map(Number);
     const [eh, em] = r.end_time.split(":").map(Number);
     const durMin = (eh < sh ? eh + 24 : eh) * 60 + em - (sh * 60 + sm);
 
-    // Check today and tomorrow
-    for (let dayOffset = 0; dayOffset <= 1; dayOffset++) {
+    // Check today and tomorrow (one-time slots only hit via exact date match)
+    for (const dayOffset of [0, 1]) {
       const d = new Date((nowEpoch + dayOffset * 86400) * 1000);
-      const wday = String((d.getDay() + 6) % 7);
-      if (r.days_of_week === "*" || r.days_of_week.split(",").includes(wday)) {
+      let dayHit;
+      if (isGanttOneTime) {
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        dayHit = r.target_date === dateStr;
+      } else {
+        const wday = String((d.getDay() + 6) % 7);
+        dayHit = r.days_of_week === "*" || r.days_of_week.split(",").includes(wday);
+      }
+      if (dayHit) {
         const slotStart = new Date(d);
         slotStart.setHours(sh, sm, 0, 0);
         const slotStartEpoch = slotStart.getTime() / 1000;
@@ -543,12 +589,13 @@ function renderTimelineView(state) {
         if (offsetSec >= 0 && offsetSec < horizonSeconds) {
           const widthPct = (durMin * 60 / horizonSeconds) * 100;
           const leftPct = (offsetSec / horizonSeconds) * 100;
+          const ganttColor = isGanttOneTime ? "bg-secondary/70 border-secondary" : "bg-primary/70 border-primary";
 
           // Render as overlay bar on track
           trackHtml += `
-            <div class="absolute top-0 bottom-0 rounded bg-primary/70 border border-primary text-primary-content text-[10px] font-bold p-1 overflow-hidden shadow z-10 truncate"
+            <div class="absolute top-0 bottom-0 rounded border text-primary-content text-[10px] font-bold p-1 overflow-hidden shadow z-10 truncate ${ganttColor}"
               style="left: ${leftPct.toFixed(1)}%; width: ${Math.max(2, widthPct).toFixed(1)}%;"
-              title="Scheduled: ${escapeHtml(r.title)} (${r.start_time} - ${r.end_time})">
+              title="Scheduled: ${escapeHtml(r.title)} (${isGanttOneTime ? r.target_date + " " : ""}${r.start_time} - ${r.end_time})">
               ${escapeHtml(r.title)}
             </div>
           `;
@@ -992,6 +1039,82 @@ function setupFormHandlers() {
       }
     });
   }
+
+  // One-Time Modal
+  const btnOpenOne = document.getElementById("btn-open-onetime-modal");
+  const modalOne = document.getElementById("modal-onetime");
+  const oneError = document.getElementById("onetime-error");
+
+  if (btnOpenOne && modalOne) {
+    btnOpenOne.addEventListener("click", () => {
+      if (oneError) oneError.classList.add("hidden");
+      const dateInput = document.getElementById("onetime-date");
+      if (dateInput && !dateInput.value) {
+        const t = new Date();
+        dateInput.value = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+      }
+      modalOne.showModal();
+    });
+  }
+
+  const formOne = document.getElementById("form-onetime");
+  if (formOne) {
+    formOne.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (oneError) oneError.classList.add("hidden");
+
+      const title = document.getElementById("onetime-title")?.value?.trim();
+      const date = document.getElementById("onetime-date")?.value;
+      const start = document.getElementById("onetime-start")?.value;
+      const end = document.getElementById("onetime-end")?.value;
+
+      const failOne = (msg) => {
+        if (oneError) {
+          oneError.textContent = msg;
+          oneError.classList.remove("hidden");
+        }
+        showToast(msg, "error");
+      };
+
+      if (!title) return failOne("Please enter a slot name.");
+      if (!date) return failOne("Please pick a date.");
+      if (!start || !end || start >= end) return failOne("Start time must be earlier than end time.");
+      if (new Date(`${date}T${end}:00`) <= new Date()) return failOne("The slot must end in the future.");
+
+      // Client-side collision pre-check against existing schedule on that date
+      const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const [ty, tm, td] = date.split("-").map(Number);
+      const slotDay = new Date(ty, tm - 1, td);
+      const wday = String((slotDay.getDay() + 6) % 7);
+      for (const s of currentState?.schedule || []) {
+        if (s.type === "one_time") {
+          if (s.target_date === date && Math.max(start, s.start_time) < Math.min(end, s.end_time)) {
+            return failOne(`Schedule collision: overlaps with one-time slot '${s.title}' on ${date} (${s.start_time} - ${s.end_time}).`);
+          }
+        } else {
+          const sDays = s.days_of_week === "*" ? ["0", "1", "2", "3", "4", "5", "6"] : s.days_of_week.split(",").map((x) => x.trim());
+          if (!sDays.includes(wday)) continue;
+          if (s.start_time <= s.end_time) {
+            if (Math.max(start, s.start_time) < Math.min(end, s.end_time)) {
+              return failOne(`Schedule collision: overlaps with recurring slot '${s.title}' (${s.start_time} - ${s.end_time}) on ${dayNames[Number(wday)]}.`);
+            }
+          } else if (start >= s.start_time || end <= s.end_time) {
+            return failOne(`Schedule collision: overlaps with recurring slot '${s.title}' (${s.start_time} - ${s.end_time}) on ${dayNames[Number(wday)]}.`);
+          }
+        }
+      }
+
+      try {
+        await postReservation("one_time", { title, target_date: date, start_time: start, end_time: end });
+        showToast("One-time window created! It auto-removes after it ends.", "success");
+        if (modalOne) modalOne.close();
+        formOne.reset();
+        await syncState();
+      } catch (err) {
+        failOne(err.message);
+      }
+    });
+  }
 }
 
 // Window global functions for inlined HTML event handlers
@@ -1010,6 +1133,17 @@ window.deleteRecurring = async function (id) {
   try {
     await postReservation("recurring/delete", { id });
     showToast("Recurring slot deleted.", "info");
+    await syncState();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+};
+
+window.deleteOneTime = async function (id) {
+  if (!confirm("Delete this one-time schedule slot?")) return;
+  try {
+    await postReservation("one_time/delete", { id });
+    showToast("One-time slot deleted.", "info");
     await syncState();
   } catch (err) {
     showToast(err.message, "error");

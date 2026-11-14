@@ -197,31 +197,6 @@
     };
 
     # 13. Ripple-65B Preview (Ricursive Intelligence) - dense 65B agentic coder
-    #     Brand-new llama.cpp architecture (`ricursive`): 80 layers, four 1024-token
-    #     sliding-window layers with RoPE + one global NoPE layer per group of five,
-    #     peri-norm, sigmoid attention output gate, value residual, SwiGLU clamped at 20.
-    #     Needs the pinned engine in modules/llama-cpp/packages/ricursive.nix.
-    #
-    #     Strix Halo tuning (128 GB unified LPDDR5x @ 256 GB/s, amdgpu.gttsize=120 GB):
-    #       * AD-Q6_K (53.75 GiB weights, mean KLD 0.0016 vs BF16). Dense decode is pure
-    #         bandwidth (~3.5 tok/s), and Q8_0 buys 0.0006 KLD for 10 GiB more bytes read
-    #         per token - not worth it. AD-Q5_K_M / AD-IQ3_S trade quality for ~17% / ~67%
-    #         more decode speed if interactivity matters more than reasoning depth.
-    #       * context 262144 is cheap for THIS architecture: llama.cpp keeps a short
-    #         sliding-window cache for the 64 SWA layers (LLAMA_SWA_TYPE_STANDARD and
-    #         swa_full=false by default - never pass --swa-full here) and only the 16
-    #         global layers carry full KV: 16 layers x 8 kv-heads x 128 dim x 2 (K+V)
-    #         x ~1.06 B (q8_0) ~= 35 KB/token => ~8.7 GB at 256K, plus ~43 MB of window
-    #         cache. Total footprint ~= 53.75 + 8.7 GiB, far inside the GTT aperture.
-    #       * -fa on keeps the short SWA cache reusable and matches the q8_0 KV path
-    #         every other llama-cpp model on this host already uses.
-    #       * -b 4096 -ub 1024 widens the prefill chunk: prefill (~130 GFLOP/token),
-    #         not decode, is where the RDNA 3.5 iGPU runs out of road on a dense 65B.
-    #       * -fit off keeps the full 256K window - the weights always fit, so there is
-    #         nothing for auto-fit to protect.
-    #       * default load mode (mmap) stays: pages are pinned through the GTT aperture
-    #         anyway and remain reclaimable if the box ever runs short.
-    #     Ricursive publishes no default sampling settings for the Preview, so none are set.
     "ripple-65b" = mkLlamaCpp {
       modelId = "ripple-65b";
       description = "Ripple-65B Preview AD-Q6_K - dense 65B agentic coder (SWA + NoPE, ricursive arch)";

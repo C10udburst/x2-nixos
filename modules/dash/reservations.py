@@ -7,12 +7,14 @@ Modes:
 - Semaphore: Indefinite exclusive lock (acquire/release).
 - Time-boxed queue: Waitlist for specific durations with automatic expiration and early release.
 - Recurring: Fixed daily schedule slots.
+- One-time: Single-date calendar slots, auto-removed once their window ends.
 """
 
 import datetime
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -131,7 +133,34 @@ def get_db():
                 created_at REAL NOT NULL
             );
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS one_time_slots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_ip TEXT NOT NULL,
+                client_name TEXT NOT NULL,
+                title TEXT NOT NULL,
+                target_date TEXT NOT NULL,   -- "YYYY-MM-DD"
+                start_time TEXT NOT NULL,    -- "HH:MM"
+                end_time TEXT NOT NULL,      -- "HH:MM"
+                created_at REAL NOT NULL
+            );
+        """)
     return conn
+
+
+def oneshot_interval(row):
+    """Concrete (start_dt, end_dt) for a one_time_slots row, or None if malformed."""
+    try:
+        y, mo, dy = [int(x) for x in row["target_date"].split("-")]
+        sh, sm = [int(x) for x in row["start_time"].split(":")]
+        eh, em = [int(x) for x in row["end_time"].split(":")]
+        start_dt = datetime.datetime(y, mo, dy, sh, sm)
+        end_dt = datetime.datetime(y, mo, dy, eh, em)
+    except ValueError:
+        return None
+    if end_dt <= start_dt:
+        return None
+    return start_dt, end_dt
 
 
 def evaluate_reservations(conn, now=None):
@@ -178,6 +207,43 @@ def evaluate_reservations(conn, now=None):
                     "note": f"Scheduled daily window: {r['title']}",
                 }
                 break
+
+    # Check one-time slots: fire inside their window, auto-delete once ended
+    cursor.execute("SELECT * FROM one_time_slots")
+    oneshot_rows = cursor.fetchall()
+    active_oneshot = None
+    fired_ids = []
+    for s in oneshot_rows:
+        iv = oneshot_interval(s)
+        if iv is None:
+            fired_ids.append(s["id"])
+            continue
+        start_ts = iv[0].timestamp()
+        end_ts = iv[1].timestamp()
+        if now >= end_ts:
+            fired_ids.append(s["id"])
+            continue
+        if start_ts <= now < end_ts and active_recurring is None:
+            active_oneshot = {
+                "id": f"one-time-{s['id']}",
+                "one_time_id": s["id"],
+                "client_ip": s["client_ip"],
+                "client_name": s["client_name"],
+                "title": s["title"],
+                "mode": "one_time",
+                "target_date": s["target_date"],
+                "start_time": s["start_time"],
+                "end_time": s["end_time"],
+                "started_at": start_ts,
+                "expires_at": end_ts,
+                "remaining_seconds": max(0, int(end_ts - now)),
+                "note": f"One-time window: {s['title']}",
+            }
+    for fid in fired_ids:
+        cursor.execute("DELETE FROM one_time_slots WHERE id = ?", (fid,))
+
+    if active_recurring is None:
+        active_recurring = active_oneshot
 
     # Check active reservation
     cursor.execute("SELECT * FROM reservations WHERE status = 'active' LIMIT 1")
@@ -273,10 +339,26 @@ def get_reservations_state(conn, client_ip):
     for s in schedule_rows:
         schedule_list.append({
             "id": s["id"],
+            "type": "recurring",
             "client_ip": s["client_ip"],
             "client_name": s["client_name"],
             "title": s["title"],
             "days_of_week": s["days_of_week"],
+            "start_time": s["start_time"],
+            "end_time": s["end_time"],
+            "created_at": s["created_at"],
+        })
+
+    # One-time slots
+    cursor.execute("SELECT * FROM one_time_slots ORDER BY target_date ASC, start_time ASC")
+    for s in cursor.fetchall():
+        schedule_list.append({
+            "id": s["id"],
+            "type": "one_time",
+            "client_ip": s["client_ip"],
+            "client_name": s["client_name"],
+            "title": s["title"],
+            "target_date": s["target_date"],
             "start_time": s["start_time"],
             "end_time": s["end_time"],
             "created_at": s["created_at"],
@@ -426,6 +508,16 @@ def main():
                                     avail_min = max(0, int((s_start_dt - dt_now).total_seconds() / 60))
                                     collision_err = f"Requested {duration}m collides with scheduled slot '{s['title']}' starting at {s['start_time']}. Maximum available time is {avail_min}m."
                                     break
+                        if collision_err is None:
+                            cursor.execute("SELECT * FROM one_time_slots")
+                            for s in cursor.fetchall():
+                                iv = oneshot_interval(s)
+                                if iv is None:
+                                    continue
+                                if max(dt_now, iv[0]) < min(req_end_dt, iv[1]):
+                                    avail_min = max(0, int((iv[0] - dt_now).total_seconds() / 60))
+                                    collision_err = f"Requested {duration}m collides with one-time slot '{s['title']}' on {s['target_date']} at {s['start_time']}. Maximum available time is {avail_min}m."
+                                    break
                     elif mode == "semaphore":
                         cutoff_dt = dt_now + datetime.timedelta(minutes=60)
                         for s in all_slots:
@@ -435,6 +527,15 @@ def main():
                                 s_start_dt = dt_now.replace(hour=sh, minute=sm, second=0, microsecond=0)
                                 if dt_now <= s_start_dt < cutoff_dt:
                                     collision_err = f"Cannot acquire indefinite semaphore: scheduled recurring slot '{s['title']}' starts at {s['start_time']}."
+                                    break
+                        if collision_err is None:
+                            cursor.execute("SELECT * FROM one_time_slots")
+                            for s in cursor.fetchall():
+                                iv = oneshot_interval(s)
+                                if iv is None:
+                                    continue
+                                if dt_now <= iv[0] < cutoff_dt:
+                                    collision_err = f"Cannot acquire indefinite semaphore: one-time slot '{s['title']}' starts {s['target_date']} at {s['start_time']}."
                                     break
 
                     if collision_err:
@@ -538,6 +639,18 @@ def main():
                                 }).encode("utf-8"))
                                 sys.stdout.buffer.flush()
                                 return
+                    cursor.execute("SELECT * FROM one_time_slots")
+                    for s in cursor.fetchall():
+                        iv = oneshot_interval(s)
+                        if iv is None:
+                            continue
+                        if max(dt_now, iv[0]) < min(new_exp_dt, iv[1]):
+                            send_headers(status="409 Conflict")
+                            sys.stdout.buffer.write(json.dumps({
+                                "error": f"Cannot extend: collides with one-time slot '{s['title']}' on {s['target_date']} at {s['start_time']}."
+                            }).encode("utf-8"))
+                            sys.stdout.buffer.flush()
+                            return
 
                     new_dur = (active["duration_minutes"] or 0) + minutes
                     cursor.execute("UPDATE reservations SET expires_at = ?, duration_minutes = ? WHERE id = ?", (new_exp, new_dur, active["id"]))
@@ -592,11 +705,126 @@ def main():
                             sys.stdout.buffer.flush()
                             return
 
+                # Collision check against upcoming one-time slots on matching dates
+                cursor.execute("SELECT * FROM one_time_slots")
+                for s in cursor.fetchall():
+                    iv = oneshot_interval(s)
+                    if iv is None:
+                        continue
+                    if iv[1].timestamp() <= now:
+                        continue
+                    if iv[0].weekday() in new_days and max(start_t, s["start_time"]) < min(end_t, s["end_time"]):
+                        send_headers(status="409 Conflict")
+                        sys.stdout.buffer.write(json.dumps({
+                            "error": f"Schedule collision: overlaps with one-time slot '{s['title']}' on {s['target_date']} ({s['start_time']} - {s['end_time']})."
+                        }).encode("utf-8"))
+                        sys.stdout.buffer.flush()
+                        return
+
                 client_name = ip_to_name(client_ip)
                 cursor.execute(
                     """INSERT INTO recurring_slots (client_ip, client_name, title, days_of_week, start_time, end_time, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (client_ip, client_name, title, days, start_t, end_t, now),
+                )
+                conn.commit()
+                state = get_reservations_state(conn, client_ip)
+                send_headers()
+                sys.stdout.buffer.write(json.dumps({"status": "created", "state": state}).encode("utf-8"))
+                sys.stdout.buffer.flush()
+                return
+
+            elif action == "one_time":
+                title = str(data.get("title", "")).strip()[:64]
+                target_date = str(data.get("target_date", "")).strip()[:10]
+                start_t = str(data.get("start_time", "09:00")).strip()[:5]
+                end_t = str(data.get("end_time", "10:00")).strip()[:5]
+
+                if not title:
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": "Slot title is required."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                try:
+                    slot_day = datetime.datetime.strptime(target_date, "%Y-%m-%d")
+                except ValueError:
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": f"Invalid date '{target_date}'. Expected YYYY-MM-DD."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                if not (re.match(r"^\d{2}:\d{2}$", start_t) and re.match(r"^\d{2}:\d{2}$", end_t)):
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": "Times must be in HH:MM 24h format."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                try:
+                    s_start = slot_day.replace(hour=int(start_t[:2]), minute=int(start_t[3:5]))
+                    s_end = slot_day.replace(hour=int(end_t[:2]), minute=int(end_t[3:5]))
+                except ValueError:
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": "Times out of range."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                if s_end <= s_start:
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": f"Start time ({start_t}) must be earlier than end time ({end_t})."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                if s_end.timestamp() <= now:
+                    send_headers(status="400 Bad Request")
+                    sys.stdout.buffer.write(json.dumps({"error": "One-time slot must end in the future."}).encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                    return
+
+                cursor = conn.cursor()
+
+                # Collision check against existing recurring slots on the target weekday
+                wday = str(s_start.weekday())
+                cursor.execute("SELECT * FROM recurring_slots")
+                day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                for s in cursor.fetchall():
+                    days = s["days_of_week"]
+                    if days != "*" and wday not in [d.strip() for d in days.split(",")]:
+                        continue
+                    # Recurring slots may wrap midnight; one-time slots never do.
+                    if s["start_time"] <= s["end_time"]:
+                        overlaps = max(start_t, s["start_time"]) < min(end_t, s["end_time"])
+                    else:
+                        overlaps = start_t >= s["start_time"] or end_t <= s["end_time"]
+                    if overlaps:
+                        send_headers(status="409 Conflict")
+                        sys.stdout.buffer.write(json.dumps({
+                            "error": f"Schedule collision: overlaps with recurring slot '{s['title']}' ({s['start_time']} - {s['end_time']}) on {day_names[s_start.weekday()]}."
+                        }).encode("utf-8"))
+                        sys.stdout.buffer.flush()
+                        return
+
+                # Collision check against existing one-time slots
+                cursor.execute("SELECT * FROM one_time_slots")
+                for s in cursor.fetchall():
+                    iv = oneshot_interval(s)
+                    if iv is None:
+                        continue
+                    if iv[1].timestamp() <= now:
+                        continue
+                    if s["target_date"] == target_date and max(start_t, s["start_time"]) < min(end_t, s["end_time"]):
+                        send_headers(status="409 Conflict")
+                        sys.stdout.buffer.write(json.dumps({
+                            "error": f"Schedule collision: overlaps with one-time slot '{s['title']}' on {target_date} ({s['start_time']} - {s['end_time']})."
+                        }).encode("utf-8"))
+                        sys.stdout.buffer.flush()
+                        return
+
+                client_name = ip_to_name(client_ip)
+                cursor.execute(
+                    """INSERT INTO one_time_slots (client_ip, client_name, title, target_date, start_time, end_time, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (client_ip, client_name, title, target_date, start_t, end_t, now),
                 )
                 conn.commit()
                 state = get_reservations_state(conn, client_ip)
@@ -617,13 +845,27 @@ def main():
                 sys.stdout.buffer.flush()
                 return
 
+            elif action in ("one_time/delete", "delete_one_time"):
+                slot_id = data.get("id")
+                cursor = conn.cursor()
+                if slot_id:
+                    cursor.execute("DELETE FROM one_time_slots WHERE id = ?", (slot_id,))
+                    conn.commit()
+                state = get_reservations_state(conn, client_ip)
+                send_headers()
+                sys.stdout.buffer.write(json.dumps({"status": "deleted", "state": state}).encode("utf-8"))
+                sys.stdout.buffer.flush()
+                return
+
         if method == "DELETE":
-            # Support DELETE for recurring slot (e.g. ?id=1)
+            # Support DELETE for recurring/one-time slot (e.g. ?id=1&type=one_time)
             query = parse_qs(os.environ.get("QUERY_STRING", ""))
             slot_id = data.get("id") or (query.get("id", [None])[0])
+            slot_type = data.get("type") or (query.get("type", ["recurring"])[0])
             cursor = conn.cursor()
             if slot_id:
-                cursor.execute("DELETE FROM recurring_slots WHERE id = ?", (slot_id,))
+                table = "one_time_slots" if slot_type == "one_time" else "recurring_slots"
+                cursor.execute(f"DELETE FROM {table} WHERE id = ?", (slot_id,))
                 conn.commit()
             state = get_reservations_state(conn, client_ip)
             send_headers()

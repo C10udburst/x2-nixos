@@ -233,11 +233,16 @@
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 class="card-title text-lg font-bold">Week-at-a-Glance Schedule</h2>
-              <p class="text-xs opacity-60">24-hour visual grid of scheduled daily recurring windows and active leases.</p>
+              <p class="text-xs opacity-60">24-hour visual grid of recurring windows, this week's one-time slots, and active leases.</p>
             </div>
-            <button id="btn-open-recurring-modal" class="btn btn-primary btn-sm font-mono text-xs" type="button">
-              + New Daily Slot
-            </button>
+            <div class="flex items-center gap-2">
+              <button id="btn-open-recurring-modal" class="btn btn-primary btn-sm font-mono text-xs" type="button">
+                + New Daily Slot
+              </button>
+              <button id="btn-open-onetime-modal" class="btn btn-secondary btn-sm font-mono text-xs" type="button">
+                + New One-Time Slot
+              </button>
+            </div>
           </div>
 
           <!-- Calendar Visual Block View -->
@@ -245,15 +250,16 @@
             <div id="calendar-grid" class="min-w-[680px]"></div>
           </div>
 
-          <!-- Existing Daily Recurring Windows Table -->
+          <!-- Existing Recurring & One-Time Windows Table -->
           <div class="flex flex-col gap-2 mt-4 border-t border-base-300 pt-4">
-            <h3 class="text-sm font-semibold opacity-70">Configured Daily Recurring Windows</h3>
-            <div id="schedule-table-empty" class="text-xs opacity-50 py-2">No recurring daily slots configured yet.</div>
+            <h3 class="text-sm font-semibold opacity-70">Configured Schedule Windows</h3>
+            <div id="schedule-table-empty" class="text-xs opacity-50 py-2">No recurring or one-time slots configured yet.</div>
             <div class="overflow-x-auto">
               <table id="schedule-table" class="table table-sm hidden w-full">
                 <thead>
                   <tr class="text-xs opacity-60">
                     <th>Title</th>
+                    <th>Type</th>
                     <th>Days</th>
                     <th>Time Window</th>
                     <th>Owner</th>
@@ -333,6 +339,44 @@
           </form>
         </div>
       </dialog>
+
+      <!-- Add One-Time Slot Modal -->
+      <dialog id="modal-onetime" class="modal">
+        <div class="modal-box bg-base-200">
+          <h3 class="font-bold text-lg">Add One-Time Window</h3>
+          <p class="py-2 text-xs opacity-60">Reserve a single fixed window on one specific date. It is removed automatically once the window ends.</p>
+
+          <form id="form-onetime" class="flex flex-col gap-3 mt-2">
+            <div id="onetime-error" class="alert alert-error text-xs py-2 hidden" role="alert"></div>
+
+            <div class="form-control">
+              <label class="label py-1" for="onetime-title"><span class="label-text text-xs">Slot Name</span></label>
+              <input id="onetime-title" class="input input-sm w-full font-mono text-xs" placeholder="e.g. Migration Run, One-off Eval" required />
+            </div>
+
+            <div class="form-control">
+              <label class="label py-1" for="onetime-date"><span class="label-text text-xs">Date</span></label>
+              <input id="onetime-date" type="date" class="input input-sm font-mono text-xs w-full" required />
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div class="form-control">
+                <label class="label py-1" for="onetime-start"><span class="label-text text-xs">Start Time (24h)</span></label>
+                <input id="onetime-start" type="time" class="input input-sm font-mono text-xs" value="09:00" required />
+              </div>
+              <div class="form-control">
+                <label class="label py-1" for="onetime-end"><span class="label-text text-xs">End Time (24h)</span></label>
+                <input id="onetime-end" type="time" class="input input-sm font-mono text-xs" value="10:00" required />
+              </div>
+            </div>
+
+            <div class="modal-action">
+              <button class="btn btn-ghost btn-sm" type="button" onclick="document.getElementById('modal-onetime').close()">Cancel</button>
+              <button class="btn btn-secondary btn-sm" type="submit">Save Slot</button>
+            </div>
+          </form>
+        </div>
+      </dialog>
     </main>
 
     <!-- ================================================================= -->
@@ -351,6 +395,7 @@
               <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-warning"></span> Active</span>
               <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-info"></span> Queued</span>
               <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-primary"></span> Recurring</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-secondary"></span> One-Time</span>
               <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded bg-base-300"></span> Available</span>
             </div>
           </div>
