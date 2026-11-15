@@ -39,6 +39,22 @@
     openflowlm = {
       url = "https://github.com/Atomic-Germ/OpenFlowLM-Next/archive/96b915d42d216e2a545db746fbd0d7387bed3157.tar.gz";
     };
+    # The GPU engine for the MoE packs that do not fit in memory at all: DeepSeek-V4.1-Flash
+    # streams its experts off the SSD (modules/libosmos). No flake and no Nix expression
+    # upstream - one Makefile - so it is pinned as a plain source and built by
+    # modules/libosmos/package.nix.
+    libosmos = {
+      url = "github:mrsirg97-rgb/libosmos";
+      flake = false;
+    };
+    # libosmos's event loop. `fetchGit` hands over an empty directory where a repository
+    # keeps a submodule, and the engine's Makefile builds the loop's sources into
+    # libosmos.a, so the submodule has to be an input of its own (`LIBEVT=<dir>` is the
+    # knob upstream provides for exactly that).
+    libevt = {
+      url = "github:mrsirg97-rgb/libevt";
+      flake = false;
+    };
   };
 
   outputs =
@@ -104,6 +120,23 @@
           };
         };
         openflowlm-full = inputs.openflowlm.packages.${system}.oflm;
+
+        # The libosmos engine: `osmos-api` (OpenAI front) and the `osmos-serve` child it
+        # spawns. This is the derivation every `mkLibosmos` unit puts in ExecStart.
+        libosmos = import ./modules/libosmos/package.nix {
+          inherit pkgs;
+          source = inputs.libosmos;
+          libevt = inputs.libevt;
+        };
+
+        # Upstream's installer, wrapped: it is what places a pack at the pinned commits and
+        # checks every SHA-256 (`nix run .#osmos-install -- --list`). Only its fetch and
+        # layout half is used - the engine is built by Nix above, so `--no-build`, and the
+        # `--serve`/`--rig` halves belong to systemd and this flake, not to it.
+        osmos-install = pkgs.writeShellScriptBin "osmos-install" ''
+          export PATH="${pkgs.lib.makeBinPath [ pkgs.python3Packages.huggingface-hub ]}:$PATH"
+          exec ${pkgs.python3}/bin/python3 ${inputs.libosmos}/tools/install/osmos_install.py "$@"
+        '';
       });
 
       nixosConfigurations = {

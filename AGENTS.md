@@ -58,7 +58,7 @@ digraph EVO_X2 {
 
 Every model is a `services.models.<model_id>` entry. Raw declarations live per hardware domain:
 
-* `models/gpu.nix`: RDNA 3.5 iGPU models (`mkGufo`, `mkLlamaCpp`, `mkKyojin`)
+* `models/gpu.nix`: RDNA 3.5 iGPU models (`mkGufo`, `mkLlamaCpp`, `mkKyojin`, `mkLibosmos`)
 * `models/npu.nix`: XDNA 2 models (`mkOpenFlow`)
 
 ### The Contract Schema
@@ -77,6 +77,10 @@ Every model entry in `services.models` adheres to:
 * **`mkLlamaCpp`**: Standard `llama-server` GGUF service with ROCm acceleration.
 * **`mkOpenFlow`**: OpenFlowLM service per model on the XDNA 2 NPU (`chat` or `asr`).
 * **`mkKyojin`**: ExLlamaV3/Kyojin inference service running native ROCm on gfx1151.
+* **`mkLibosmos`**: libosmos (`osmos-api` + its `osmos-serve` child) for the MoE packs that
+  exceed memory: DeepSeek-V4.1-Flash streams its experts from the SSD. Its command line is
+  a generated `osmos.json`, so one pack directory backs both the stock and the
+  `-uncensored` entry - the abliteration is one `overlay` key over shared weights.
 
 ---
 

@@ -2,9 +2,9 @@
 #
 # This module owns the *shape* of the registry, never the entries themselves:
 #
-#   * the engine factories (`mkGufo`, `mkLlamaCpp`, `mkKyojin`, `mkNpuModel`,
-#     `mkOpenFlow`), exposed to every other module through `_module.args` so a registry
-#     file needs no imports;
+#   * the engine factories (`mkGufo`, `mkLlamaCpp`, `mkKyojin`, `mkLibosmos`,
+#     `mkNpuModel`, `mkOpenFlow`), exposed to every other module through `_module.args` so
+#     a registry file needs no imports;
 #   * the contract itself - `services.models.<id>` (see the option below) and
 #     `services.defaultModel`;
 #   * the orchestration glue: one systemd unit per registry entry with intra-domain
@@ -37,6 +37,7 @@ let
       inputs
       ;
   };
+  mkLibosmos = import ./libosmos/mkLibosmos.nix { inherit pkgs lib config; };
   mkNpuModel = import ./npu/mkNpuModel.nix { inherit pkgs lib config; };
   mkOpenFlow = import ./npu/mkOpenFlow.nix { inherit pkgs lib config; };
 in
@@ -46,6 +47,7 @@ in
     ./gufo
     ./llama-cpp
     ./kyojin
+    ./libosmos
     ./npu
     ./immich
     ./comfyui
@@ -145,6 +147,7 @@ in
         mkGufo
         mkLlamaCpp
         mkKyojin
+        mkLibosmos
         mkNpuModel
         mkOpenFlow
         ;

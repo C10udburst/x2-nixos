@@ -12,6 +12,7 @@
   mkGufo,
   mkLlamaCpp,
   mkKyojin,
+  mkLibosmos,
   ...
 }:
 {
@@ -222,6 +223,41 @@
         "-fit"
         "off"
       ];
+    };
+
+    # 14. DeepSeek V4.1 Flash UD-IQ1_M on libosmos: a ~768B MoE that does not fit in
+    #     memory at all. 140 GB of quantized experts beside a 203 GB MXFP8 Engram table,
+    #     read from the SSD while it runs (7.1 GB/s prompts on this box), drafted by a
+    #     4.7 GB DSpark, at the model's own 1M window. Placed once by
+    #     modules/libosmos/dl.sh; the pack directory keeps upstream's own name.
+    "deepseek-v4.1-flash" = mkLibosmos {
+      modelId = "deepseek-v4.1-flash";
+      description = "DeepSeek V4.1 Flash UD-IQ1_M (140 GB + a 203 GB streamed Engram table) with DSpark drafting, 1M context";
+      modelPath = "ud-iq1_m/DeepSeek-V4.1-Flash-1017-UD-IQ1_M-00001-of-00005.gguf";
+      picksPath = "ud-iq1_m/osmos-picks.bin";
+      drafterPath = "ud-iq1_m/dspark";
+      context = 1048576; # the window the pack ships with; --ctx 512k is the shorter run
+      maxTokens = 4096; # the pack's own step: an answer is produced 4096 tokens at a time
+      noGuess = true; # the pack's pick profile needs no experts guessed a layer ahead
+      sessions = 1;
+    };
+
+    # 15. The same bytes with huihui-ai's abliteration laid over them at load time:
+    #     `overlay` is one 0.6 GB GGUF whose tensors stand in for the model's of the same
+    #     names, so the uncensored model costs no extra weights - only the 0.2-0.5%
+    #     perplexity an abliteration costs, at the same speed. Loading it evicts the stock
+    #     one: same GPU domain, Rule 1.
+    "deepseek-v4.1-flash-uncensored" = mkLibosmos {
+      modelId = "deepseek-v4.1-flash-uncensored";
+      description = "DeepSeek V4.1 Flash UD-IQ1_M Uncensored (runtime abliteration overlay, shared weights)";
+      modelPath = "ud-iq1_m/DeepSeek-V4.1-Flash-1017-UD-IQ1_M-00001-of-00005.gguf";
+      picksPath = "ud-iq1_m/osmos-picks.bin";
+      drafterPath = "ud-iq1_m/dspark";
+      overlayPath = "ud-iq1_m/DeepSeek-V4.1-Flash-1017-UD-IQ1_M-patch.gguf";
+      context = 1048576;
+      maxTokens = 4096;
+      noGuess = true;
+      sessions = 1;
     };
   };
 }

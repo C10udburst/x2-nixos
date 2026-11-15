@@ -234,6 +234,38 @@
         "type": "github"
       }
     },
+    "libevt": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793901374,
+        "narHash": "sha256-uSUWN1fpX2jq9daCMakHli8AlromPbWP+qjL2XkLH8g=",
+        "owner": "mrsirg97-rgb",
+        "repo": "libevt",
+        "rev": "32988ad4a8545b8f8b70874173ea80d137cb7252",
+        "type": "github"
+      },
+      "original": {
+        "owner": "mrsirg97-rgb",
+        "repo": "libevt",
+        "type": "github"
+      }
+    },
+    "libosmos": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794689067,
+        "narHash": "sha256-TKLMIxBtW517yyO7+aHkJ1egC+uEcvjfUk8pdrj9NvY=",
+        "owner": "mrsirg97-rgb",
+        "repo": "libosmos",
+        "rev": "b52b80516109c2d612a3a13be771b369219456e7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "mrsirg97-rgb",
+        "repo": "libosmos",
+        "type": "github"
+      }
+    },
     "nix-amd-ai": {
       "inputs": {
         "flake-compat": "flake-compat_2",
@@ -445,6 +477,8 @@
         "disko": "disko",
         "gufo": "gufo",
         "kyojin": "kyojin",
+        "libevt": "libevt",
+        "libosmos": "libosmos",
         "nixpkgs": "nixpkgs",
         "openflowlm": "openflowlm"
       }
