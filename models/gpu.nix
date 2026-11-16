@@ -40,36 +40,6 @@
       sessions = 8;
     };
 
-    # 3. Example Second Model: Qwen 2.5 72B Instruct
-    "qwen2.5-72b-instruct" = mkLlamaCpp {
-      modelId = "qwen2.5-72b-instruct";
-      description = "Qwen 2.5 72B Instruct (Q4_K_M) - High reasoning capability";
-      modelPath = "qwen2.5-72b-instruct";
-      context = 32768;
-      cacheTypeK = "q8_0";
-      cacheTypeV = "q8_0";
-      gpuLayers = 99;
-      parallel = 4;
-      flashAttention = true;
-      threads = 16;
-      jinja = true;
-    };
-
-    # 4. Example Third Model: DeepSeek R1 Distill Qwen 32B
-    "deepseek-r1-distill-qwen-32b" = mkLlamaCpp {
-      modelId = "deepseek-r1-distill-qwen-32b";
-      description = "DeepSeek R1 Distill Qwen 32B (Q8_0) - Deep reasoning specialist";
-      modelPath = "deepseek-r1-distill-qwen-32b";
-      context = 131072;
-      cacheTypeK = "q8_0";
-      cacheTypeV = "q8_0";
-      gpuLayers = 99;
-      parallel = 4;
-      flashAttention = true;
-      threads = 16;
-      jinja = true;
-    };
-
     # 5. Multimodal OCR: GLM-OCR 0.9B
     "glm-ocr" = mkLlamaCpp {
       modelId = "glm-ocr";
@@ -153,17 +123,6 @@
       flashAttention = true;
       threads = 16;
       jinja = true;
-    };
-
-    # 11. DeepSeek V4 Flash (IQ2XXS, 80.76 GiB) with DSpark speculative decoding
-    "deepseek-v4-flash" = mkGufo {
-      modelId = "deepseek-v4-flash";
-      description = "DeepSeek V4 Flash IQ2XXS (80.76 GiB) with DSpark speculative decoding";
-      modelPath = "deepseek-v4-flash/DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf";
-      speculative = "dspark";
-      dsparkModelPath = "deepseek-v4-flash/DeepSeek-V4-Flash-DSpark-support-0731.gguf";
-      context = 131072; # Maximum native context length (128K tokens) verified on 128GB Strix Halo
-      sessions = 1;
     };
 
     "mimo-v2.6-flash-mopd" = mkLlamaCpp {

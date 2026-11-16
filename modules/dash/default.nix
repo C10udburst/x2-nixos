@@ -3,7 +3,8 @@
   lib,
   pkgs,
   ...
-}: let
+}:
+let
   cfg = config.services.gateway;
 
   # Serialized model and workload metadata from global registry contract
@@ -14,57 +15,54 @@
     gpu_exclusive_units = config.services.workload-manager.gpuExclusiveUnits;
     npu_exclusive_units = config.services.workload-manager.npuExclusiveUnits;
     all_exclusive_units = config.services.workload-manager.allExclusiveUnits;
-    services =
-      [
-        {
-          id = "gateway";
-          name = "API Gateway";
-          port = cfg.port;
-          type = "gateway";
-          unit = "nginx.service";
-          description = "OpenAI compatible API gateway & dashboard";
-        }
-      ]
-      ++ (lib.optional (config.services ? immich-ml && config.services.immich-ml.enable) {
-        id = "immich-machine-learning";
-        name = "Immich ML";
-        port = config.services.immich-ml.port;
-        backend_port = config.services.immich-ml.backendPort;
-        type = "on-demand";
-        unit = "immich-machine-learning.service";
-        socket_unit = "immich-ml-listener.socket";
-        description = "Immich photo ML inference engine";
-      })
-      ++ (lib.optional (config.services ? comfyui && config.services.comfyui.enable) {
-        id = "comfyui";
-        name = "ComfyUI";
-        port = config.services.comfyui.port;
-        backend_port = config.services.comfyui.backendPort;
-        type = "on-demand";
-        unit = "comfyui.service";
-        socket_unit = "comfyui-listener.socket";
-        description = "ComfyUI generative AI studio";
-      });
-    models =
-      lib.mapAttrs (_: m: {
-        device = m.device;
-        service_name = m.serviceName;
-        remapped_model = m.remappedModel;
-        url = m.url;
-        description = m.description;
-        type = m.type;
-        sessions = m.sessions;
-        context = m.context;
-        capabilities = m.capabilities;
-        model_dir = m.modelDir;
-      })
-      config.services.models;
+    services = [
+      {
+        id = "gateway";
+        name = "API Gateway";
+        port = cfg.port;
+        type = "gateway";
+        unit = "nginx.service";
+        description = "OpenAI compatible API gateway & dashboard";
+      }
+    ]
+    ++ (lib.optional (config.services ? immich-ml && config.services.immich-ml.enable) {
+      id = "immich-machine-learning";
+      name = "Immich ML";
+      port = config.services.immich-ml.port;
+      backend_port = config.services.immich-ml.backendPort;
+      type = "on-demand";
+      unit = "immich-machine-learning.service";
+      socket_unit = "immich-ml-listener.socket";
+      description = "Immich photo ML inference engine";
+    })
+    ++ (lib.optional (config.services ? comfyui && config.services.comfyui.enable) {
+      id = "comfyui";
+      name = "ComfyUI";
+      port = config.services.comfyui.port;
+      backend_port = config.services.comfyui.backendPort;
+      type = "on-demand";
+      unit = "comfyui.service";
+      socket_unit = "comfyui-listener.socket";
+      description = "ComfyUI generative AI studio";
+    });
+    models = lib.mapAttrs (_: m: {
+      device = m.device;
+      service_name = m.serviceName;
+      remapped_model = m.remappedModel;
+      url = m.url;
+      description = m.description;
+      type = m.type;
+      sessions = m.sessions;
+      context = m.context;
+      capabilities = m.capabilities;
+      model_dir = m.modelDir;
+    }) config.services.models;
   };
 
   modelsJsonFile = pkgs.writeText "models-registry.json" (builtins.toJSON modelsConfig);
 
   # Static frontend (Tailwind 4 + daisyUI 5 + Lightweight Charts), built at build time
-  dashboardFrontend = import ./frontend.nix {inherit pkgs lib;};
+  dashboardFrontend = import ./frontend.nix { inherit pkgs lib; };
 
   # Classic OpenAI /v1/models payload generated at Nix eval time - THE model listing for
   # both API clients and the dashboard (it is fetched once on page load), which is why
@@ -77,31 +75,34 @@
   # /api/status `active_gpu_model` / `active_npu_model` matched against `id`.
   openaiModelsJson = {
     object = "list";
-    data =
-      lib.mapAttrsToList (name: m: {
-        id = name;
-        object = "model";
-        created = 1700000000;
-        owned_by = "evo-x2";
-        root = name;
-        parent = null;
-        device = m.device;
-        backend = m.type;
-        context_length = m.context;
-        sessions = m.sessions;
-        description = m.description;
-        capabilities = m.capabilities;
-      })
-      config.services.models;
+    data = lib.mapAttrsToList (name: m: {
+      id = name;
+      object = "model";
+      created = 1700000000;
+      owned_by = "evo-x2";
+      root = name;
+      parent = null;
+      device = m.device;
+      backend = m.type;
+      context_length = m.context;
+      sessions = m.sessions;
+      description = m.description;
+      capabilities = m.capabilities;
+      meta = {
+        n_ctx = m.context;
+      };
+    }) config.services.models;
   };
   openaiModelsJsonFile = pkgs.writeText "openai-models.json" (builtins.toJSON openaiModelsJson);
 
   # Python Dashboard API wrapper
   dashScript = pkgs.writeShellScript "ai-dash-api" ''
-    export PATH="/run/wrappers/bin:${lib.makeBinPath [
-      pkgs.systemd
-      pkgs.coreutils
-    ]}:$PATH"
+    export PATH="/run/wrappers/bin:${
+      lib.makeBinPath [
+        pkgs.systemd
+        pkgs.coreutils
+      ]
+    }:$PATH"
     export MODELS_CONFIG_PATH="${modelsJsonFile}"
     export SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
     exec ${pkgs.python3}/bin/python3 ${./dash.py} "$@"
@@ -109,9 +110,11 @@
 
   # Dedicated FastCGI Reservations API (zero idle usage, state in SQLite)
   reservationsScript = pkgs.writeShellScript "ai-reservations-api" ''
-    export PATH="/run/wrappers/bin:${lib.makeBinPath [
-      pkgs.coreutils
-    ]}:$PATH"
+    export PATH="/run/wrappers/bin:${
+      lib.makeBinPath [
+        pkgs.coreutils
+      ]
+    }:$PATH"
     export RESERVATIONS_DB_PATH="/var/lib/gateway/reservations.db"
     exec ${pkgs.python3}/bin/python3 ${./reservations.py} "$@"
   '';
@@ -120,14 +123,16 @@
   # modules/switcher/service.nix). When it is disabled we fall back to the historical FastCGI
   # CGI script, so the gateway keeps working during the migration.
   switcherScript = pkgs.writeShellScript "ai-v1-switcher" ''
-    export PATH="/run/wrappers/bin:${lib.makeBinPath [
-      pkgs.jq
-      pkgs.curl
-      pkgs.gnused
-      pkgs.coreutils
-      pkgs.systemd
-      pkgs.util-linux
-    ]}:$PATH"
+    export PATH="/run/wrappers/bin:${
+      lib.makeBinPath [
+        pkgs.jq
+        pkgs.curl
+        pkgs.gnused
+        pkgs.coreutils
+        pkgs.systemd
+        pkgs.util-linux
+      ]
+    }:$PATH"
     export MODELS_CONFIG_PATH="${modelsJsonFile}"
     export SYSTEMCTL="${pkgs.systemd}/bin/systemctl"
     export STOP_OTHER_WORKLOADS="${config.services.workload-manager.stopScript}"
@@ -137,7 +142,10 @@
   # Where /v1/* goes: the Rust router's unix socket when enabled, else fcgiwrap.
   useSwitcherDaemon = config.services ? switcher && config.services.switcher.enable;
   switcherSocket =
-    if config.services ? switcher then config.services.switcher.socketPath else "/run/switcher/switcher.sock";
+    if config.services ? switcher then
+      config.services.switcher.socketPath
+    else
+      "/run/switcher/switcher.sock";
 
   # One snippet, two backends. `proxy_pass` to the daemon vs `fastcgi_pass` to the CGI.
   #
@@ -167,7 +175,8 @@
     client_body_timeout 600s;
     client_max_body_size 0;
   '';
-in {
+in
+{
   options.services.gateway = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -189,7 +198,7 @@ in {
       group = "gateway";
       description = "AI Gateway Service User";
     };
-    users.groups.gateway = {};
+    users.groups.gateway = { };
 
     # Dedicated fcgiwrap instance for Dashboard API (/api/*)
     services.fcgiwrap.instances.dash = {
@@ -323,6 +332,6 @@ in {
     # passwordless sudo for `systemctl` and the stop-other-workloads script - no extra rule here.
 
     # Open firewall port
-    networking.firewall.allowedTCPPorts = [cfg.port];
+    networking.firewall.allowedTCPPorts = [ cfg.port ];
   };
 }

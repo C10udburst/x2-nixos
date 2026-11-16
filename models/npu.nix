@@ -30,26 +30,6 @@ in
 {
   config = lib.mkIf npuEnabled.enable {
     services.models = {
-      # 14. Llama 3.2 1B Instruct on the XDNA 2 NPU (Q4_1, `Llama-3.2-1B-NPU2`).
-      #     The catalogue declares 131072 context; 8192 is what this host actually runs, so
-      #     the KV cache stays next to a warm GPU model instead of eating unified memory.
-      "llama3.2:1b" = mkOpenFlow {
-        modelId = "llama3.2:1b";
-        description = "Llama 3.2 1B Instruct Q4_1 on the Ryzen AI NPU via OpenFlowLM - light chat alongside the GPU LLM";
-        port = 8083;
-        context = 8192;
-      };
-
-      # 15. Llama 3.2 3B Instruct (Q4_1, ~2.7 GB footprint). Same tag family, so a client
-      #     can ask for either by name and the router picks the unit - which means two
-      #     units, two ports, and one NPU: switching one in evicts the other.
-      "llama3.2:3b" = mkOpenFlow {
-        modelId = "llama3.2:3b";
-        description = "Llama 3.2 3B Instruct Q4_1 on the Ryzen AI NPU via OpenFlowLM";
-        port = 8084;
-        context = 8192;
-      };
-
       # 16. Whisper large-v3 turbo as a standalone ASR server (`--asr 1` with no chat tag:
       #     `serve` loads no LLM, and POST /v1/audio/transcriptions answers on its own).
       #     Context is fixed at 448 tokens / 30 s windows by the architecture, so there is
