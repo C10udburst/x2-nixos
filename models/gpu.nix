@@ -47,13 +47,8 @@
       modelPath = "glm-ocr/GLM-OCR-Q8_0.gguf";
       mmprojPath = "glm-ocr/mmproj-GLM-OCR-Q8_0.gguf";
       context = 8192;
-      cacheTypeK = "q8_0";
-      cacheTypeV = "q8_0";
-      gpuLayers = 99;
       parallel = 16;
-      flashAttention = true;
-      threads = 16;
-      jinja = true;
+      temp = 0.0; # deterministic OCR
     };
 
     # 6. Uncensored Flash-Next (Q4 Mix) with MTP speculative decoding & vision
@@ -76,13 +71,7 @@
       modelPath = "lfm2.5-8b-a1b/LFM2.5-8B-A1B-Q4_K_M.gguf";
       # 128000 = lfm2moe.context_length in the GGUF (native ceiling, rope base 5e6)
       context = 128000;
-      cacheTypeK = "q8_0";
-      cacheTypeV = "q8_0";
-      gpuLayers = 99;
       parallel = 16;
-      flashAttention = true;
-      threads = 16;
-      jinja = true;
     };
 
     # 8. GLM-5.3-Flash EXL3 (320B total, 18B active) with MTP speculative decoding & vision
@@ -116,13 +105,22 @@
       description = "Humanizer 12B v2 (Q8_0) - Text humanizer via llama-server";
       modelPath = "humanizer/humanizer-12b-Q8_0.gguf";
       context = 8192;
-      cacheTypeK = "q8_0";
-      cacheTypeV = "q8_0";
-      gpuLayers = 99;
       parallel = 1;
-      flashAttention = true;
-      threads = 16;
-      jinja = true;
+    };
+
+    # 11. Bielik 11B v3.1 Instruct (Polish/multilingual) with DFlash speculative decoding.
+    #     Q8_0 is near-lossless and ~2x faster than BF16 on the memory-bound iGPU, so it
+    #     leaves room for 16 native-context sessions (16 x 32K = 512K total KV).
+    "bielik-11b-v3.1" = mkLlamaCpp {
+      modelId = "bielik-11b-v3.1";
+      description = "Bielik 11B v3.1 Instruct (Q8_0) with DFlash speculative decoding - Polish/multilingual";
+      modelPath = "bielik-11b-v3.1/Bielik-11B-v3.1-Instruct.Q8_0.gguf";
+      draftModelPath = "bielik-11b-v3.1/Bielik-11B-v3.1-DFlash.Q8_0.gguf";
+      speculative = "draft-dflash";
+      draftTokens = 15; # trained block size is 16; the model card uses 15
+      context = 32768; # llama.context_length (native ceiling)
+      sessions = 16; # 16 x 32K = 512K total KV
+      temp = 0.3; # general.sampling.temp in the GGUF / model card
     };
 
     "mimo-v2.6-flash-mopd" = mkLlamaCpp {
@@ -131,13 +129,9 @@
       modelPath = "mimo-v2.6-flash-mopd"; # first shard; llama.cpp pulls the other three via split metadata
       mmprojPath = "mimo-v2.6-flash-mopd/mmproj-MiMo-V2.6-Flash-MOPD-BF16.gguf";
       context = 1048576; # selected profile; native ceiling is 1048576 but OOMs on 128 GB
-      cacheTypeK = "q8_0";
-      cacheTypeV = "q8_0";
-      gpuLayers = 999;
       parallel = 2;
-      flashAttention = true;
-      threads = 16; # 16 physical Zen 5 cores for decode
-      jinja = true; # native MiMo chat template: think blocks, tool calls, enable_thinking kwarg
+      # native MiMo chat template: think blocks, tool calls, enable_thinking kwarg
+      temp = 0.2; # agentic tool-calling; raise toward 1.0 for creative chat
       extraArgs = [
         "-b"
         "2048"
@@ -167,13 +161,8 @@
         rocmPackages = pkgs.rocmPackages.gfx1151;
       };
       context = 262144; # native ceiling is 2097152; 256K keeps the KV cache under ~9 GiB
-      cacheTypeK = "q8_0";
-      cacheTypeV = "q8_0";
-      gpuLayers = 99; # all 80 layers on the RDNA 3.5 iGPU
       parallel = 1; # single slot: dense 65B decode is bandwidth-bound
-      flashAttention = true;
-      threads = 16; # 16 physical Zen 5 cores
-      jinja = true; # ChatML template with tool calls + <think> reasoning is embedded
+      # ChatML template with tool calls + <think> reasoning is embedded
       extraArgs = [
         "-b"
         "4096"

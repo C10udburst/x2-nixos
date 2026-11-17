@@ -14,15 +14,37 @@
   sessions ? parallel,
   flashAttention ? true,
   threads ? 16,
-  cacheTypeK ? null,
-  cacheTypeV ? null,
+  cacheTypeK ? "q8_0",
+  cacheTypeV ? "q8_0",
   jinja ? true,
   mlock ? false,
   port ? (config.services.llamacpp.backendPort or 8082),
   modelsDir ? (config.services.llamacpp.modelsDir or "/srv/models"),
   package ? (config.services.llamacpp.package or (pkgs.llama-cpp.override {rocmSupport = true;})),
-  gpuLayers ? 99,
+  gpuLayers ? 999,
   mmprojPath ? null,
+  # Sampling (null = llama.cpp's own default).
+  temp ? null,
+  topP ? null,
+  topK ? null,
+  minP ? null,
+  repeatPenalty ? null,
+  presencePenalty ? null,
+  frequencyPenalty ? null,
+  # Batching (null = llama.cpp's own default: -b 2048 -ub 512).
+  batchSize ? null,
+  ubatchSize ? null,
+  # Speculative decoding.
+  speculative ? null,
+  draftModelPath ? null,
+  draftTokens ? null,
+  draftPMin ? null,
+  draftGpuLayers ? gpuLayers,
+  draftCacheTypeK ? cacheTypeK,
+  draftCacheTypeV ? cacheTypeV,
+  draftThreads ? null,
+  # Memory.
+  noMmap ? false,
   extraArgs ? [],
   env ? {},
 }: let
@@ -98,6 +120,82 @@
         MMPROJ_PATH="${mmprojPath}"
       fi
       ARGS+=(--mmproj "$MMPROJ_PATH")
+    ''}
+
+    ${lib.optionalString (temp != null) ''
+      ARGS+=(--temp "${toString temp}")
+    ''}
+
+    ${lib.optionalString (topP != null) ''
+      ARGS+=(--top-p "${toString topP}")
+    ''}
+
+    ${lib.optionalString (topK != null) ''
+      ARGS+=(--top-k "${toString topK}")
+    ''}
+
+    ${lib.optionalString (minP != null) ''
+      ARGS+=(--min-p "${toString minP}")
+    ''}
+
+    ${lib.optionalString (repeatPenalty != null) ''
+      ARGS+=(--repeat-penalty "${toString repeatPenalty}")
+    ''}
+
+    ${lib.optionalString (presencePenalty != null) ''
+      ARGS+=(--presence-penalty "${toString presencePenalty}")
+    ''}
+
+    ${lib.optionalString (frequencyPenalty != null) ''
+      ARGS+=(--frequency-penalty "${toString frequencyPenalty}")
+    ''}
+
+    ${lib.optionalString (batchSize != null) ''
+      ARGS+=(-b "${toString batchSize}")
+    ''}
+
+    ${lib.optionalString (ubatchSize != null) ''
+      ARGS+=(-ub "${toString ubatchSize}")
+    ''}
+
+    ${lib.optionalString (draftModelPath != null) ''
+      DRAFT_PATH="${modelsDir}/${draftModelPath}"
+      if [ ! -f "$DRAFT_PATH" ] && [ -f "${draftModelPath}" ]; then
+        DRAFT_PATH="${draftModelPath}"
+      fi
+      ARGS+=(-md "$DRAFT_PATH")
+    ''}
+
+    ${lib.optionalString (draftModelPath != null && speculative != null) ''
+      ARGS+=(--spec-type "${speculative}")
+    ''}
+
+    ${lib.optionalString (draftModelPath != null && draftTokens != null) ''
+      ARGS+=(--spec-draft-n-max "${toString draftTokens}")
+    ''}
+
+    ${lib.optionalString (draftModelPath != null && draftPMin != null) ''
+      ARGS+=(--spec-draft-p-min "${toString draftPMin}")
+    ''}
+
+    ${lib.optionalString (draftModelPath != null && draftGpuLayers != null) ''
+      ARGS+=(-ngld "${toString draftGpuLayers}")
+    ''}
+
+    ${lib.optionalString (draftModelPath != null && draftCacheTypeK != null) ''
+      ARGS+=(-ctkd "${draftCacheTypeK}")
+    ''}
+
+    ${lib.optionalString (draftModelPath != null && draftCacheTypeV != null) ''
+      ARGS+=(-ctvd "${draftCacheTypeV}")
+    ''}
+
+    ${lib.optionalString (draftModelPath != null && draftThreads != null) ''
+      ARGS+=(-td "${toString draftThreads}")
+    ''}
+
+    ${lib.optionalString noMmap ''
+      ARGS+=(--no-mmap)
     ''}
 
     ${lib.concatMapStringsSep "\n" (arg: "ARGS+=(${lib.escapeShellArg arg})") extraArgs}
