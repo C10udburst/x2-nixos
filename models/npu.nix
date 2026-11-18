@@ -56,16 +56,22 @@ in
 
       "gemma4-it:e2b" = mkOpenFlow {
         modelId = "gemma4-it:e2b";
-        description = "Gemma 4 IT e2b on the Ryzen AI NPU via OpenFlowLM - pareto optimal chat/tool calling model";
+        description = "Gemma 4 IT e2b on the Ryzen AI NPU via OpenFlowLM";
         port = 8089;
         context = 32768;
       };
 
-      "nanbeige4.1:3b" = mkOpenFlow {
-        modelId = "nanbeige4.1:3b";
-        description = "NanBeige 4.1 3B on the Ryzen AI NPU via OpenFlowLM - pareto optimal chat/tool calling model";
+      "qwen3.5:9b" = mkOpenFlow {
+        modelId = "qwen3.5:9b";
+        description = "Qwen 3.5 9B on the Ryzen AI NPU via OpenFlowLM";
         port = 8090;
         context = 32768;
+      };
+
+      "flux2-klein:4b" = mkOpenFlow {
+        modelId = "flux2-klein:4b";
+        description = "Flux 2 Klein 4B Image Generation model on the Ryzen AI NPU via OpenFlowLM";
+        port = 8091;
       };
 
       # The four BERT sets (`all-minilm:l12-v2`, `all-minilm:l6-v2`, `bge-base:en-v1.5`,
