@@ -61,17 +61,11 @@ in
         context = 32768;
       };
 
-      "qwen3.5:9b" = mkOpenFlow {
-        modelId = "qwen3.5:9b";
-        description = "Qwen 3.5 9B on the Ryzen AI NPU via OpenFlowLM";
+      "qwen3:8b" = mkOpenFlow {
+        modelId = "qwen3:8b";
+        description = "Qwen 3 8B on the Ryzen AI NPU via OpenFlowLM";
         port = 8090;
         context = 32768;
-      };
-
-      "flux2-klein:4b" = mkOpenFlow {
-        modelId = "flux2-klein:4b";
-        description = "Flux 2 Klein 4B Image Generation model on the Ryzen AI NPU via OpenFlowLM";
-        port = 8091;
       };
 
       # The four BERT sets (`all-minilm:l12-v2`, `all-minilm:l6-v2`, `bge-base:en-v1.5`,

@@ -20,7 +20,12 @@
 # Both modality-only forms are real standalone servers: `serve` without a chat tag loads no
 # LLM (the `model-faker` sentinel), so Whisper holds ~1 GB and an embedding model loads on its
 # own. Only the CLI `/input` voice→text→LLM flow wants a chat model loaded beside it.
-{ pkgs, lib, config, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  ...
+}:
 {
   modelId,
   description ? "",
@@ -49,15 +54,13 @@ let
   variantName = lib.concatStringsSep ":" (lib.drop 1 parts);
 
   family =
-    cfg.catalogue.models.${familyName}
-    or (throw ''
+    cfg.catalogue.models.${familyName} or (throw ''
       mkOpenFlow: '${modelId}' is not in the OpenFlowLM catalogue.
       Known families: ${lib.concatStringsSep ", " (lib.attrNames cfg.catalogue.models)}
     '');
 
   entry =
-    family.${variantName}
-    or (throw ''
+    family.${variantName} or (throw ''
       mkOpenFlow: '${modelId}' has no '${variantName}' variant.
       Known variants of '${familyName}': ${lib.concatStringsSep ", " (lib.attrNames family)}
     '');
@@ -68,42 +71,64 @@ let
   # Reported to /v1/models as context_length; the engine's own default when unset.
   declaredContext = if context != null then context else (entry.default_context_length or null);
 
-  capabilities = {
-    chat = [ "chat" "completions" ];
-    asr = [ "audio-transcriptions" ];
-    embeddings = [ "embeddings" ];
-  }
-  .${kind}
-  or (throw "mkOpenFlow: unknown kind '${kind}' (chat, asr, embeddings)");
+  capabilities =
+    {
+      chat = [
+        "chat"
+        "completions"
+      ];
+      asr = [ "audio-transcriptions" ];
+      embeddings = [ "embeddings" ];
+      image = [ "image-generation" ];
+    }
+    .${kind} or (throw "mkOpenFlow: unknown kind '${kind}' (chat, asr, embeddings)");
 
   # The modality switches. `--asr`/`--embed` load the model *instead of* a chat model, so the
   # tag travels in the matching --asrmodel/--embeddingmodel flag and no positional tag is
   # given - passing one would pull the LLM in beside it.
-  kindArgs = {
-    chat = [ modelId ];
-    asr = [ "--asr" "1" "--asrmodel" modelId ];
-    embeddings = [ "--embed" "1" "--embeddingmodel" modelId ];
-  }
-  .${kind}
-  or [ ];
+  kindArgs =
+    {
+      chat = [ modelId ];
+      asr = [
+        "--asr"
+        "1"
+        "--asrmodel"
+        modelId
+      ];
+      embeddings = [
+        "--embed"
+        "1"
+        "--embeddingmodel"
+        modelId
+      ];
+      image = [
+        "--imagegen"
+        "1"
+        "--imagemodel"
+        modelId
+      ];
+    }
+    .${kind} or [ ];
 
-  serveArgs =
-    [
-      "serve"
-      "--host"
-      "127.0.0.1"
-      "--port"
-      (toString port)
-      "--pmode"
-      cfg.powerMode
-      # nginx is the only client; a wildcard CORS header on a loopback-originated request
-      # buys nothing the gateway's own header does not already give.
-      "--cors"
-      "0"
-    ]
-    ++ kindArgs
-    ++ lib.optionals (kind == "chat" && context != null) [ "--ctx-len" (toString context) ]
-    ++ extraArgs;
+  serveArgs = [
+    "serve"
+    "--host"
+    "127.0.0.1"
+    "--port"
+    (toString port)
+    "--pmode"
+    cfg.powerMode
+    # nginx is the only client; a wildcard CORS header on a loopback-originated request
+    # buys nothing the gateway's own header does not already give.
+    "--cors"
+    "0"
+  ]
+  ++ kindArgs
+  ++ lib.optionals (kind == "chat" && context != null) [
+    "--ctx-len"
+    (toString context)
+  ]
+  ++ extraArgs;
 
   # systemd unit names have no room for a tag's ':'.
   slug = lib.replaceStrings [ ":" "/" " " ] [ "-" "-" "-" ] modelId;
@@ -115,7 +140,9 @@ let
     export OFLM_MODEL_PATH="''${OFLM_MODEL_PATH:-${cfg.modelStore}}"
     export HOME="''${HOME:-/var/lib/oflm}"
 
-    ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") extraEnv)}
+    ${lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") extraEnv
+    )}
 
     # Deliberately NOT OFLM_XCLBIN_PATH: the engine searches `<exe_dir>/../share/oflm`
     # first, and that is where the kernel package is linked. Exporting the variable would
@@ -142,7 +169,8 @@ in
       OFLM_MODEL_PATH = cfg.modelStore;
       # `oflm` writes settings.json here and `oflm add` installs under it.
       HOME = "/var/lib/oflm";
-    } // extraEnv;
+    }
+    // extraEnv;
 
     serviceConfig = {
       Type = "simple";
