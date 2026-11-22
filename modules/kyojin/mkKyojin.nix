@@ -74,10 +74,10 @@ let
     # ROCm 7 natively targets gfx1151; HSA_OVERRIDE_GFX_VERSION must stay unset
     unset HSA_OVERRIDE_GFX_VERSION
 
-    # Ensure helper modules (serve_compat, image_cache) from kyojin repo are accessible
-    ${lib.optionalString (inputs ? kyojin) ''
-      export PYTHONPATH="${inputs.kyojin}/tools:${inputs.kyojin}/tools/strix_halo:''${PYTHONPATH:-}"
-    ''}
+    # Helper modules (serve_compat, strix_halo/image_cache) ship inside the package at
+    # $out/share/kyojin, which the kyojin-serve-* wrappers already put on PYTHONPATH.
+    # Exporting ${inputs.kyojin}/tools here instead would pull the raw flake *source*
+    # tree into every service's runtime closure and shadow the packaged copy.
 
     TARGET_PATH="${modelsDir}/${modelPath}"
 

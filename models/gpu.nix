@@ -17,7 +17,7 @@
 }:
 {
   services.models = {
-    # 1. Primary Model: Qwen 3.8 Flash Next with MTP speculative decoding & vision
+    # Primary Model: Qwen 3.8 Flash Next with MTP speculative decoding & vision
     "qwen3.8-flash-next" = mkGufo {
       modelId = "qwen3.8-flash-next";
       description = "Qwen 3.8 Flash Next UD-Q4_K_XL with MTP speculative decoding & vision";
@@ -28,7 +28,7 @@
       sessions = 2;
     };
 
-    # 2. Qwen 3.8 27B with DFlash2 speculative decoding & vision
+    # Qwen 3.8 27B with DFlash2 speculative decoding & vision
     "qwen3.8-27b" = mkGufo {
       modelId = "qwen3.8-27b";
       description = "Qwen 3.8 27B UD-Q4_K_XL with DFlash2 speculative decoding & vision";
@@ -40,7 +40,7 @@
       sessions = 8;
     };
 
-    # 5. Multimodal OCR: GLM-OCR 0.9B
+    # Multimodal OCR: GLM-OCR 0.9B
     "glm-ocr" = mkLlamaCpp {
       modelId = "glm-ocr";
       description = "GLM-OCR 0.9B (Q8_0) - Document OCR";
@@ -51,7 +51,7 @@
       temp = 0.0; # deterministic OCR
     };
 
-    # 6. Uncensored Flash-Next (Q4 Mix) with MTP speculative decoding & vision
+    # Uncensored Flash-Next (Q4 Mix) with MTP speculative decoding & vision
     "qwen3.8-flash-next-uncensored" = mkGufo {
       modelId = "qwen3.8-flash-next-uncensored";
       description = "Qwen 3.8 Flash Next Uncensored Q4 Mix with MTP speculative decoding & vision";
@@ -64,7 +64,7 @@
       sessions = 2;
     };
 
-    # 7. Liquid AI LFM2.5-8B-A1B (hybrid conv/attention MoE, 1.5B active params)
+    # Liquid AI LFM2.5-8B-A1B (hybrid conv/attention MoE, 1.5B active params)
     "lfm2.5-8b-a1b" = mkLlamaCpp {
       modelId = "lfm2.5-8b-a1b";
       description = "LFM2.5 8B A1B (Q4_K_M) - fast MoE chat/coder, 1.5B active params";
@@ -74,7 +74,7 @@
       parallel = 16;
     };
 
-    # 8. GLM-5.3-Flash EXL3 (320B total, 18B active) with MTP speculative decoding & vision
+    # GLM-5.3-Flash EXL3 (320B total, 18B active) with MTP speculative decoding & vision
     "glm-5.3-flash" = mkKyojin {
       modelId = "glm-5.3-flash";
       description = "GLM-5.3-Flash EXL3 (320B total, 18B active) with MTP speculative decoding & vision";
@@ -86,7 +86,7 @@
       uncensor = false;
     };
 
-    # 9. GLM-5.3-Flash EXL3 Uncensored (shares base weights via runtime refusal-direction ablit hook)
+    # GLM-5.3-Flash EXL3 Uncensored (shares base weights via runtime refusal-direction ablit hook)
     "glm-5.3-flash-uncensored" = mkKyojin {
       modelId = "glm-5.3-flash-uncensored";
       remappedModel = "glm-5.3-flash-uncensored";
@@ -99,7 +99,7 @@
       uncensor = true;
     };
 
-    # 10. Humanizer 12B v2 (fine-tuned Gemma 4 12B) text humanization model
+    # Humanizer 12B v2 (fine-tuned Gemma 4 12B) text humanization model
     "humanizer" = mkLlamaCpp {
       modelId = "humanizer";
       description = "Humanizer 12B v2 (Q8_0) - Text humanizer via llama-server";
@@ -108,20 +108,6 @@
       parallel = 1;
     };
 
-    # 11. Bielik 11B v3.1 Instruct (Polish/multilingual) with DFlash speculative decoding.
-    #     Q8_0 is near-lossless and ~2x faster than BF16 on the memory-bound iGPU, so it
-    #     leaves room for 16 native-context sessions (16 x 32K = 512K total KV).
-    "bielik-11b-v3.1" = mkLlamaCpp {
-      modelId = "bielik-11b-v3.1";
-      description = "Bielik 11B v3.1 Instruct (Q8_0) with DFlash speculative decoding - Polish/multilingual";
-      modelPath = "bielik-11b-v3.1/Bielik-11B-v3.1-Instruct.Q8_0.gguf";
-      draftModelPath = "bielik-11b-v3.1/Bielik-11B-v3.1-DFlash.Q8_0.gguf";
-      speculative = "draft-dflash";
-      draftTokens = 15; # trained block size is 16; the model card uses 15
-      context = 32768; # llama.context_length (native ceiling)
-      sessions = 16; # 16 x 32K = 512K total KV
-      temp = 0.3; # general.sampling.temp in the GGUF / model card
-    };
 
     "mimo-v2.6-flash-mopd" = mkLlamaCpp {
       modelId = "mimo-v2.6-flash-mopd";
@@ -150,7 +136,7 @@
       ];
     };
 
-    # 13. Ripple-65B Preview (Ricursive Intelligence) - dense 65B agentic coder
+    # Ripple-65B Preview (Ricursive Intelligence) - dense 65B agentic coder
     "ripple-65b" = mkLlamaCpp {
       modelId = "ripple-65b";
       description = "Ripple-65B Preview AD-Q6_K - dense 65B agentic coder (SWA + NoPE, ricursive arch)";
@@ -173,7 +159,7 @@
       ];
     };
 
-    # 14. DeepSeek V4.1 Flash UD-IQ1_M on libosmos: a ~768B MoE that does not fit in
+    # DeepSeek V4.1 Flash UD-IQ1_M on libosmos: a ~768B MoE that does not fit in
     #     memory at all. 140 GB of quantized experts beside a 203 GB MXFP8 Engram table,
     #     read from the SSD while it runs (7.1 GB/s prompts on this box), drafted by a
     #     4.7 GB DSpark, at the model's own 1M window. Placed once by
@@ -190,7 +176,7 @@
       sessions = 1;
     };
 
-    # 15. The same bytes with huihui-ai's abliteration laid over them at load time:
+    # The same bytes with huihui-ai's abliteration laid over them at load time:
     #     `overlay` is one 0.6 GB GGUF whose tensors stand in for the model's of the same
     #     names, so the uncensored model costs no extra weights - only the 0.2-0.5%
     #     perplexity an abliteration costs, at the same speed. Loading it evicts the stock

@@ -193,14 +193,16 @@
         "audio-cpp": "audio-cpp",
         "nixpkgs": [
           "nixpkgs"
-        ]
+        ],
+        "nixpkgs-rocm10": "nixpkgs-rocm10",
+        "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1791323846,
-        "narHash": "sha256-8H8P7WRQeEa+vvOBUxrIkAimNShN5VRzPB2G5J1BjS8=",
+        "lastModified": 1795289175,
+        "narHash": "sha256-dfQ9YRigVrLvByRLql3dKi3xgg+Ch3m5jbut8Z1wYkQ=",
         "owner": "gufo-org",
         "repo": "gufo",
-        "rev": "33d1b208a72e9664fdc1267ae1c0d465cfb9b8f9",
+        "rev": "c3018d642eeb8986fa450bcf0ba0b3337417fd39",
         "type": "github"
       },
       "original": {
@@ -221,11 +223,11 @@
         "uv2nix": "uv2nix"
       },
       "locked": {
-        "lastModified": 1792075680,
-        "narHash": "sha256-K10eJmoEcpQYWFwZY6u4EIemQc7Rcx9lsOGAilr8eRM=",
+        "lastModified": 1795251858,
+        "narHash": "sha256-ZMSJDjQzfE8ZEv/U20+BffYmwefCRu2Jp68jldPavzk=",
         "owner": "Yamz-Labs",
         "repo": "kyojin",
-        "rev": "9b845ab6114e2d066972d97e5c044598c7fdc75a",
+        "rev": "96f2dc744d699154dc461c5ddec5b8cec74b4ea0",
         "type": "github"
       },
       "original": {
@@ -253,11 +255,11 @@
     "libosmos": {
       "flake": false,
       "locked": {
-        "lastModified": 1794689067,
-        "narHash": "sha256-TKLMIxBtW517yyO7+aHkJ1egC+uEcvjfUk8pdrj9NvY=",
+        "lastModified": 1795286348,
+        "narHash": "sha256-hZ8MW9S8ZYUoGm8LTP2Ny4n7lJi49JdszEgPR1Lg6U0=",
         "owner": "mrsirg97-rgb",
         "repo": "libosmos",
-        "rev": "b52b80516109c2d612a3a13be771b369219456e7",
+        "rev": "d29748d5423cf9dcd8fee01c6e0e58686d85d63e",
         "type": "github"
       },
       "original": {
@@ -388,6 +390,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-rocm10": {
+      "locked": {
+        "lastModified": 1792804498,
+        "narHash": "sha256-yrZaTHidqCI3oJgXDAobDazn+qdeUD328pk22ZQ/YsI=",
+        "owner": "gufo-org",
+        "repo": "nixpkgs",
+        "rev": "1a6ba8bc6f744f7a843d025e46bc9911b4b6c37d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gufo-org",
+        "repo": "nixpkgs",
+        "rev": "1a6ba8bc6f744f7a843d025e46bc9911b4b6c37d",
+        "type": "github"
+      }
+    },
     "nixpkgs_2": {
       "locked": {
         "lastModified": 1790046670,
@@ -481,6 +499,27 @@
         "libosmos": "libosmos",
         "nixpkgs": "nixpkgs",
         "openflowlm": "openflowlm"
+      }
+    },
+    "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "gufo",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1793610678,
+        "narHash": "sha256-5V08BokWHSUU962Kcr/uSTWyy+1NqB7pjuyqjqXTqQU=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "6b29b8e8d3cc8ebda9342fbbcc7ac06eff58e2fb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
       }
     },
     "uv2nix": {

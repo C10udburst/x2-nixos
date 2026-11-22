@@ -14,16 +14,13 @@ let
     else
       pkgs.kyojin or null;
 
-  defaultKyojinPkg =
-    if rawKyojinPkg != null && inputs ? kyojin then
-      rawKyojinPkg.overrideAttrs (old: {
-        postInstall = (old.postInstall or "") + ''
-          cp ${inputs.kyojin}/tools/serve_compat.py $out/share/kyojin/
-          cp ${inputs.kyojin}/tools/strix_halo/image_cache.py $out/share/kyojin/
-        '';
-      })
-    else
-      rawKyojinPkg;
+  # Upstream `kyojinServe` now ships the *entire* `tools/` tree into
+  # $out/share/kyojin (`cp -rL`, dereferencing the ../strix_halo symlinks) and puts that
+  # directory on PYTHONPATH in every kyojin-serve-* wrapper, so serve_compat.py and
+  # strix_halo/image_cache.py are already installed. Copying them in a `postInstall`
+  # hook is not only redundant: the store output is made read-only by makeBinaryHolder's
+  # rightsHook before postInstall runs, so the copy fails with "Permission denied".
+  defaultKyojinPkg = rawKyojinPkg;
 in
 {
   options.services.kyojin = {
