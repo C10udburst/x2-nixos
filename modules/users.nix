@@ -49,6 +49,21 @@
     ];
   };
 
+  users.users.llm-agent = {
+    isNormalUser = true;
+    description = "llm-agent";
+    extraGroups = [
+      "nixconfig"
+      "wheel"
+      "video"
+      "render"
+      "networkmanager"
+    ];
+    openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICCkGmP81VxnJVsWzq4WVhJVeatdI2H2Hha84mY1OF8N llm-agent@amadeusz"
+    ];
+  };
+
   users.users.miecz = {
     isNormalUser = true;
     description = "miecz";
