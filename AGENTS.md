@@ -73,7 +73,13 @@ Every model entry in `services.models` adheres to:
 
 ### Helper Functions
 
-* **`mkGufo`**: Gufo native ROCm/GGUF service.
+* **`mkGufo`**: Gufo native ROCm service, two modalities behind one `kind` argument.
+  `kind = "llm"` (the default) serves a GGUF at `/v1/chat/completions`; `kind = "image"` serves a
+  Qwen-Image-2.1 Diffusers **snapshot directory** (`gufo serve image`) at `/v1/images/generations`
+  and `/v1/images/edits`, publishes `capabilities = [ "images" ]`, reports `modelDir` so the router
+  pre-flights the weights, and takes `aliases` as further `--served-model-name` spellings.
+  `qwen-image-2.1-turbo` is the image entry; `./dl.sh` (repo root) places its snapshot at the
+  revision Gufo's `src/models/qwen_image_21/models.lock.json` pins and checks every SHA-256.
 * **`mkLlamaCpp`**: Standard `llama-server` GGUF service with ROCm acceleration.
 * **`mkOpenFlow`**: OpenFlowLM service per model on the XDNA 2 NPU (`chat` or `asr`).
 * **`mkKyojin`**: ExLlamaV3/Kyojin inference service running native ROCm on gfx1151.

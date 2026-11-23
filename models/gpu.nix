@@ -193,5 +193,21 @@
       noGuess = true;
       sessions = 1;
     };
+
+    # Image domain: Qwen-Image-2.1-Turbo, Gufo's native BF16 DiT (no GGUF, no llama.cpp).
+    #     `kind = "image"` swaps `gufo serve llm` for `gufo serve image`, so `modelPath` is a
+    #     Diffusers *snapshot directory* - transformer/, vae/, text_encoder/, processor/,
+    #     scheduler/ beside model_index.json - placed by ./dl.sh at the revision Gufo's own
+    #     src/models/qwen_image_21/models.lock.json pins (32.5 GB; the DiT is 14.2, the
+    #     Qwen3-VL text encoder 17.5, the image VAE 0.7).
+    #
+    # Answers on POST /v1/images/generations (JSON) and POST /v1/images/edits (multipart, up
+    "qwen-image-2.1-turbo" = mkGufo {
+      modelId = "qwen-image-2.1-turbo";
+      description = "Qwen-Image-2.1-Turbo BF16 - eight-step image generation & editing (/v1/images)";
+      kind = "image";
+      modelPath = "qwen-image-2.1-turbo";
+      sessions = 1;
+    };
   };
 }
