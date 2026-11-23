@@ -242,12 +242,21 @@ function renderLiveView(state) {
     setText(document.getElementById("live-timer-sub"), "Ready for immediate lock");
   }
 
-  // Queue banner for current user
+  // Queue banner for current user (one client may own several waitlist entries)
   if (queueBanner) {
+    const myPositions =
+      state.client.queue_positions || (state.client.queue_position ? [state.client.queue_position] : []);
     if (isQueued) {
       queueBanner.classList.remove("hidden");
       const posText = queueBanner.querySelector("span");
-      if (posText) posText.textContent = `⏳ You are #${state.client.queue_position} in the waitlist!`;
+      if (posText) {
+        posText.textContent =
+          myPositions.length > 1
+            ? `⏳ You have ${myPositions.length} tasks in the waitlist (#${myPositions.join(", #")})`
+            : `⏳ You are #${myPositions[0]} in the waitlist!`;
+      }
+      const btnLeaveQueue = document.getElementById("btn-leave-queue");
+      if (btnLeaveQueue) setText(btnLeaveQueue, myPositions.length > 1 ? "Leave Whole Queue" : "Leave Queue");
     } else {
       queueBanner.classList.add("hidden");
     }
@@ -287,7 +296,7 @@ function renderLiveView(state) {
                 <span class="badge badge-outline font-mono text-[11px]">${modeLabel}</span>
                 ${
                   isMe
-                    ? `<button class="btn btn-error btn-xs btn-outline font-mono" onclick="window.leaveWaitlist()">Leave</button>`
+                    ? `<button class="btn btn-error btn-xs btn-outline font-mono" onclick="window.leaveWaitlist(${Number(item.id)})">Leave</button>`
                     : ""
                 }
               </div>
@@ -852,7 +861,9 @@ function setupFormHandlers() {
           showToast("Exclusive lock acquired!", "success");
           playChime();
         } else if (res.status === "queued") {
-          showToast(`Queued at position #${res.state?.client?.queue_position}`, "info");
+          const mine = res.state?.client?.queued_count || 1;
+          const pos = res.state?.client?.queue_position;
+          showToast(mine > 1 ? `Queued at #${pos} - you have ${mine} tasks waiting` : `Queued at position #${pos}`, "info");
         } else if (res.status === "already_active") {
           showToast("You already hold the active reservation.", "info");
         }
@@ -1118,10 +1129,16 @@ function setupFormHandlers() {
 }
 
 // Window global functions for inlined HTML event handlers
-window.leaveWaitlist = async function () {
+// Without an id: drop every entry this client owns. With an id: drop that single task only.
+window.leaveWaitlist = async function (id) {
   try {
-    await postReservation("cancel");
-    showToast("Left waitlist queue.", "info");
+    if (id != null) {
+      await postReservation("cancel", { id: Number(id) });
+      showToast("Removed that task from the waitlist.", "info");
+    } else {
+      await postReservation("cancel");
+      showToast("Left waitlist queue.", "info");
+    }
     await syncState();
   } catch (err) {
     showToast(err.message, "error");

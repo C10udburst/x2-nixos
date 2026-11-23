@@ -102,6 +102,7 @@ Every model entry in `services.models` adheres to:
 * **Port 8080**: Serves static dashboard, content-hashed assets (`/assets/*`), telemetry API (`/api/status`), and OpenAI model listing (`/v1/models`).
 * **Rust Router Daemon (`modules/switcher/`)**: Zero-dependency `std`-only router handling model resolution, request routing, streaming, and connection pooling.
 * **Dashboard UI**: Tailwind CSS 4 + daisyUI 5 + Lightweight Charts™ with dual-domain controls and interactive playgrounds.
+* **Reservations API (`modules/dash/reservations.py`)**: CGI on `/api/reservations*`, state in SQLite. A client (by IP) may enqueue **any number** of waitlist tasks - including entries queued behind its own active lease - there is no per-client cap. `/api/reservations` answers `client.queue_positions` (every position that client owns) plus `client.queue_position` (earliest, for older clients); `POST cancel` with an `id` drops a single entry, without one it drops them all.
 
 ---
 

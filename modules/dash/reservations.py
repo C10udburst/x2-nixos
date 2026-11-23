@@ -48,6 +48,11 @@ NOUNS = [
 ]
 
 
+def client_queue_positions(queue_list, client_ip):
+    """1-based waitlist positions of *every* queued entry owned by `client_ip`."""
+    return [idx + 1 for idx, item in enumerate(queue_list) if item["client_ip"] == client_ip]
+
+
 def send_headers(status="200 OK", content_type="application/json; charset=utf-8"):
     headers = [
         f"Status: {status}",
@@ -391,13 +396,11 @@ def get_reservations_state(conn, client_ip):
     if active_info and active_info.get("client_ip") == client_ip:
         is_holder = True
 
-    is_queued = False
-    queue_position = None
-    for idx, item in enumerate(queue_list):
-        if item["client_ip"] == client_ip:
-            is_queued = True
-            queue_position = idx + 1
-            break
+    # One client may own several waitlist entries, so report all of them: `queue_position`
+    # stays the earliest (back-compat), `queue_positions`/`queued_count` describe the rest.
+    my_positions = client_queue_positions(queue_list, client_ip)
+    is_queued = bool(my_positions)
+    queue_position = my_positions[0] if my_positions else None
 
     return {
         "client": {
@@ -406,6 +409,8 @@ def get_reservations_state(conn, client_ip):
             "is_holder": is_holder,
             "is_queued": is_queued,
             "queue_position": queue_position,
+            "queue_positions": my_positions,
+            "queued_count": len(my_positions),
         },
         "active": active_info,
         "queue": queue_list,
@@ -468,20 +473,9 @@ def main():
                 active, recurring = evaluate_reservations(conn, now)
                 cursor = conn.cursor()
 
-                if (active and active["client_ip"] == client_ip) or (recurring and recurring["client_ip"] == client_ip):
-                    state = get_reservations_state(conn, client_ip)
-                    send_headers()
-                    sys.stdout.buffer.write(json.dumps({"status": "already_active", "state": state}).encode("utf-8"))
-                    sys.stdout.buffer.flush()
-                    return
-
-                cursor.execute("SELECT id FROM reservations WHERE status = 'queued' AND client_ip = ? LIMIT 1", (client_ip,))
-                if cursor.fetchone():
-                    state = get_reservations_state(conn, client_ip)
-                    send_headers()
-                    sys.stdout.buffer.write(json.dumps({"status": "already_queued", "state": state}).encode("utf-8"))
-                    sys.stdout.buffer.flush()
-                    return
+                # A client may enqueue an unlimited number of tasks, including while it holds
+                # the lease: every request joins the FIFO behind everyone already waiting and is
+                # promoted in turn order.
 
                 client_name = ip_to_name(client_ip)
 
