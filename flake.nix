@@ -55,6 +55,13 @@
       url = "github:mrsirg97-rgb/libevt";
       flake = false;
     };
+    # The CI binary cache: .github/workflows/build-and-cache.yml sources this input's
+    # `lib/cache-builder.sh` to push what it builds to GHCR, and the host reads that cache
+    # back through its `nixcache-proxy` nixosModule (modules/nix.nix). Both ends pinned.
+    nixcache-oci = {
+      url = "github:cmspam/nixcache-oci";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -145,6 +152,7 @@
           specialArgs = { inherit inputs; };
           modules = [
             disko.nixosModules.disko
+            (inputs.nixcache-oci.nixosModules.default or { })
             ./disko.nix
             ./configuration.nix
           ];

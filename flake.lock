@@ -314,6 +314,26 @@
         "type": "github"
       }
     },
+    "nixcache-oci": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1795296196,
+        "narHash": "sha256-6RlEkgkot1i8SJSQA2CvauRGX2l68kyDkJFT1pV/DEY=",
+        "owner": "cmspam",
+        "repo": "nixcache-oci",
+        "rev": "838bed6046ff2f0428b49485ebd07269cd0fc399",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cmspam",
+        "repo": "nixcache-oci",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1791260994,
@@ -497,6 +517,7 @@
         "kyojin": "kyojin",
         "libevt": "libevt",
         "libosmos": "libosmos",
+        "nixcache-oci": "nixcache-oci",
         "nixpkgs": "nixpkgs",
         "openflowlm": "openflowlm"
       }

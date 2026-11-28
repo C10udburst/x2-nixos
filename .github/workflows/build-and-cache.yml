@@ -1,0 +1,124 @@
+name: Build and Cache Hosts
+
+# Builds the evo-x2 system closure plus the standalone engine packages and pushes every
+# store path that no upstream cache carries to ghcr.io/<repo>/nix-cache (nixcache-oci).
+# The host pulls the same cache back through the local nixcache-proxy (modules/nix.nix).
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+    inputs:
+      with_installer_iso:
+        description: "Also build and cache the installer ISO (iso/ subflake)"
+        type: boolean
+        default: false
+  workflow_run:
+    workflows: ["Update Flake Inputs"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-cache:
+    name: Build and Cache evo-x2
+    runs-on: ubuntu-latest
+    # A cold ROCm/torch/NPU closure does not fit in the 6h default; keep the cap explicit.
+    timeout-minutes: 360
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The pipeline dumps NARs next to the store it just filled, so the closure is on
+      # disk twice: reclaim as much of the pre-baked runner image as is safe to lose.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo docker image prune --all --force 2>/dev/null || true
+          df -h
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761 # master
+        with:
+          swap-size-gb: 10
+
+      # Keep substituters and keys in sync with modules/nix.nix: the runner has to find the
+      # same prebuilts the host does (ROCm, ComfyUI/torch, the XRT/amdxdna NPU closure).
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: |
+            max-jobs = 1
+            cores = 2
+            extra-substituters = https://comfyui.cachix.org https://nix-community.cachix.org https://cache.nixos-cuda.org https://numtide.cachix.org https://nix-amd-ai.cachix.org
+            extra-trusted-public-keys = comfyui.cachix.org-1:33mf9VzoIjzVbp0zwj+fT51HG0y31ZTK3nzYZAX0rec= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= cache.nixos-cuda.org:74DUi4Ye579gUqzH4ziL9IyiJBlDpMRn9MBN8oNan9M= numtide.cachix.org-1:psk1bDfU1UhVfiVNyPCxyhR+FtmpNkamWT0DwIK+jic= nix-amd-ai.cachix.org-1:F4OU4vw/lV2oiG6SBHZ+nqjl4EFJuqI4X9A7pvaBmhQ=
+
+      # Every input of this flake is a public repo or a public tarball, so unlike the
+      # multi-host repo there is nothing to authenticate to beyond GHCR push itself.
+      - name: Setup signing key
+        run: |
+          if [[ -n "${{ secrets.NIX_SIGNING_KEY }}" ]]; then
+            echo "${{ secrets.NIX_SIGNING_KEY }}" > "$RUNNER_TEMP/signing-key"
+            echo "NIXCACHE_SIGNING_KEY_FILE=$RUNNER_TEMP/signing-key" >> "$GITHUB_ENV"
+            nix key convert-secret-to-public < "$RUNNER_TEMP/signing-key" > "$RUNNER_TEMP/signing-key.pub"
+            echo ">>> Signing key configured: $(cat "$RUNNER_TEMP/signing-key.pub")"
+            {
+              echo "## Cache signing key"
+              echo ""
+              echo "Paste into \`modules/nix.nix\` (\`cachePublicKey\`):"
+              echo ""
+              echo "\`\`\`"
+              cat "$RUNNER_TEMP/signing-key.pub"
+              echo "\`\`\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::No NIX_SIGNING_KEY secret - the cache will be unsigned"
+          fi
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build hosts and publish cache
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NIXCACHE_CONFIG_DIR: "."
+          WITH_INSTALLER_ISO: ${{ inputs.with_installer_iso }}
+        run: |
+          set -euo pipefail
+
+          # GHCR requires lowercase repository names
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          export NIXCACHE_REPO="$REPO"
+          export NIXCACHE_IMAGE="ghcr.io/${NIXCACHE_REPO}/nix-cache"
+
+          # The cache builder comes from the locked flake input, not from the network
+          NIXCACHE_SRC=$(nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixcache-oci.outPath')
+          source "${NIXCACHE_SRC}/lib/cache-builder.sh"
+
+          # Replaces the upstream auto-discovery, which would also build the two outputs
+          # this runner must not touch: `openflowlm-full` (mlir-aie/Peano toolchain, and its
+          # BERT kernels need /dev/accel* plus __noChroot) and `nixosConfigurations.default`,
+          # which is only an alias of evo-x2 and would be built twice.
+          discover_outputs() {
+            echo ".#nixosConfigurations.evo-x2.config.system.build.toplevel"
+            echo ".#packages.x86_64-linux.switcher"
+            echo ".#packages.x86_64-linux.openflowlm"
+            echo ".#packages.x86_64-linux.libosmos"
+            if [[ "$WITH_INSTALLER_ISO" == "true" ]]; then
+              echo "./iso#nixosConfigurations.installer-iso.config.system.build.isoImage"
+            fi
+          }
+
+          full_pipeline

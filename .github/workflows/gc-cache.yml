@@ -1,0 +1,167 @@
+name: Garbage Collect Cache
+
+# Prunes ghcr.io/<repo>/nix-cache: everything outside the closure of the current outputs
+# and older than the retention window. Runs after each cache push, or on demand.
+
+on:
+  workflow_run:
+    workflows: ["Build and Cache Hosts"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: "Delete entries older than N days that are not in the current closure"
+        default: "30"
+        type: string
+      dry_run:
+        description: "Show what would be deleted without deleting"
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: gc-cache
+  cancel-in-progress: false
+
+jobs:
+  gc:
+    name: Garbage Collect Cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo docker image prune --all --force 2>/dev/null || true
+          df -h
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761 # master
+        with:
+          swap-size-gb: 10
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: |
+            max-jobs = 1
+            cores = 2
+            extra-substituters = https://comfyui.cachix.org https://nix-community.cachix.org https://cache.nixos-cuda.org https://numtide.cachix.org https://nix-amd-ai.cachix.org
+            extra-trusted-public-keys = comfyui.cachix.org-1:33mf9VzoIjzVbp0zwj+fT51HG0y31ZTK3nzYZAX0rec= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= cache.nixos-cuda.org:74DUi4Ye579gUqzH4ziL9IyiJBlDpMRn9MBN8oNan9M= numtide.cachix.org-1:psk1bDfU1UhVfiVNyPCxyhR+FtmpNkamWT0DwIK+jic= nix-amd-ai.cachix.org-1:F4OU4vw/lV2oiG6SBHZ+nqjl4EFJuqI4X9A7pvaBmhQ=
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Run garbage collection
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RETENTION_DAYS: ${{ inputs.retention_days || '30' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          export NIXCACHE_REPO="$REPO"
+          export NIXCACHE_IMAGE="ghcr.io/${NIXCACHE_REPO}/nix-cache"
+
+          NIXCACHE_SRC=$(nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixcache-oci.outPath')
+          source "${NIXCACHE_SRC}/lib/cache-builder.sh"
+
+          CUTOFF=$(date -u -d "${RETENTION_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)
+          echo ">>> Retention: ${RETENTION_DAYS} days (cutoff: ${CUTOFF})"
+          echo ">>> Dry run: ${DRY_RUN}"
+
+          # Root the GC on exactly what build-and-cache.yml publishes, so live entries
+          # are never dropped while a rebuild is in flight.
+          start_self_substituter
+          mapfile -t paths_array <<< "$(build_outputs \
+            ".#nixosConfigurations.evo-x2.config.system.build.toplevel" \
+            ".#packages.x86_64-linux.switcher" \
+            ".#packages.x86_64-linux.openflowlm" \
+            ".#packages.x86_64-linux.libosmos")"
+          LIVE_CLOSURE=$(get_closure "${paths_array[@]}")
+          LIVE_HASHES=$(echo "$LIVE_CLOSURE" | xargs -I{} basename {} | cut -c1-32 | sort -u)
+          stop_self_substituter
+
+          oci_get_token
+          existing_manifest=$(oci_get_manifest "cache-index")
+          if [[ -z "$existing_manifest" ]]; then
+            echo ">>> No cache index found, nothing to GC"
+            exit 0
+          fi
+
+          index_digest=$(echo "$existing_manifest" | jq -r '.layers[0].digest // empty')
+          if [[ -z "$index_digest" ]]; then
+            echo ">>> Empty index, nothing to GC"
+            exit 0
+          fi
+
+          INDEX_FILE="/tmp/gc-current-index.json"
+          oci_get_blob "$index_digest" > "$INDEX_FILE"
+          echo "$LIVE_HASHES" > /tmp/gc-live-hashes.txt
+
+          python3 - "$CUTOFF" "$DRY_RUN" "$INDEX_FILE" /tmp/gc-live-hashes.txt <<'PYEOF'
+          import json, sys
+
+          cutoff = sys.argv[1]
+          dry_run = sys.argv[2] == "true"
+
+          with open(sys.argv[3]) as f:
+              index = json.load(f)
+          with open(sys.argv[4]) as f:
+              live_hashes = set(f.read().strip().split("\n"))
+
+          to_delete, to_keep = [], {}
+          for hash_key, entry in index.get("entries", {}).items():
+              added = entry.get("added", "2099-01-01T00:00:00Z")
+              if hash_key not in live_hashes and added < cutoff:
+                  to_delete.append((hash_key, entry))
+                  print(f"DELETE: {hash_key} ({entry.get('name', '?')}) added={added}")
+              else:
+                  to_keep[hash_key] = entry
+                  print(f"KEEP:   {hash_key} ({entry.get('name', '?')}) reason={'live' if hash_key in live_hashes else 'recent'}")
+
+          print(f"\n>>> Total: {len(to_keep)} keep, {len(to_delete)} delete")
+
+          if dry_run:
+              print(">>> Dry run, no changes")
+          elif to_delete:
+              index["entries"] = to_keep
+              index["gc_roots"] = [h for h in index.get("gc_roots", []) if h in to_keep]
+              with open("/tmp/gc-updated-index.json", "w") as f:
+                  json.dump(index, f, indent=2, sort_keys=True)
+              print("UPDATED")
+          PYEOF
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            exit 0
+          fi
+
+          if [[ -f "/tmp/gc-updated-index.json" ]]; then
+            INDEX_FILE="/tmp/gc-updated-index.json"
+            INDEX_DIGEST=$(oci_push_blob "$INDEX_FILE")
+            INDEX_SIZE=$(stat -c%s "$INDEX_FILE")
+
+            CONFIG_FILE=$(mktemp)
+            echo '{}' > "$CONFIG_FILE"
+            CONFIG_DIGEST=$(oci_push_blob "$CONFIG_FILE")
+            CONFIG_SIZE=$(stat -c%s "$CONFIG_FILE")
+
+            MANIFEST=$(jq -n \
+              --arg cd "$CONFIG_DIGEST" --argjson cs "$CONFIG_SIZE" \
+              --arg id "$INDEX_DIGEST" --argjson is "$INDEX_SIZE" \
+              '{schemaVersion:2, mediaType:"application/vnd.oci.image.manifest.v1+json",
+                config:{mediaType:"application/vnd.oci.image.config.v1+json",digest:$cd,size:$cs},
+                layers:[{mediaType:"application/vnd.nix.cache.index.v1+json",digest:$id,size:$is}]}')
+            oci_push_manifest "cache-index" "$MANIFEST"
+            echo ">>> GC complete, index updated"
+            rm -f "$CONFIG_FILE"
+          fi

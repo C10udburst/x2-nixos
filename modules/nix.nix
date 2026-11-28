@@ -4,6 +4,10 @@
   pkgs,
   ...
 }:
+let
+  cachePublicKey = "x2-nixos-1:IuXoIiJ2fNOuT4EVh7C13AXaGGm01vRBbpYlcKZKVqQ=";
+  cacheEnabled = cachePublicKey != "";
+in
 {
   nix.settings = {
     experimental-features = [
@@ -43,6 +47,29 @@
     auto-optimise-store = true;
     warn-dirty = false;
   };
+
+  # What CI publishes to ghcr.io/<owner>/<repo>/nix-cache. GHCR cannot be a substituter on
+  # its own, so nixcache-proxy answers narinfos from the cache index and streams the NAR
+  # blobs on localhost; the package is public, so the proxy pulls anonymously.
+  services.nixcache-proxy = lib.mkIf cacheEnabled {
+    enable = true;
+    repo = "c10udburst/x2-nixos";
+    publicKey = cachePublicKey;
+  };
+
+  # What the proxy forwards a miss to: every cache above, minus itself.
+  systemd.services.nixcache-proxy.environment.NIXCACHE_UPSTREAM = lib.mkIf cacheEnabled (
+    let
+      all = lib.unique (
+        (config.nix.settings.substituters or [ "https://cache.nixos.org" ])
+        ++ (config.nix.settings.extra-substituters or [ ])
+      );
+      isLocal = s: lib.hasPrefix "http://localhost" s || lib.hasPrefix "http://127.0.0.1" s;
+    in
+      builtins.concatStringsSep " " (
+        map (lib.removeSuffix "/") (builtins.filter (s: !isLocal s) all)
+      )
+  );
 
   # Periodic garbage collection for headless server
   nix.gc = {

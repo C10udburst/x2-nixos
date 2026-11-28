@@ -1,0 +1,55 @@
+name: Update Flake Inputs
+
+# Bumps flake.lock and commits it; "Build and Cache Hosts" then runs on the result via
+# workflow_run, so the cache always covers the committed lock.
+
+on:
+  workflow_dispatch:
+    inputs:
+      flake_update_arg:
+        description: "Arguments for 'nix flake update' (empty = whole lock, e.g. --update-input gufo)"
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Update Flake Inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+
+      # Two pins are hand-curated and a blanket update does not do what one expects:
+      #   openflowlm - an archive URL with the rev baked into it, so `flake update` only
+      #                re-hashes it; bump the rev in flake.nix and refresh narHash by hand.
+      #   libosmos + libevt - must move together, the engine builds libevt's sources in.
+      - name: Update Flake
+        env:
+          FLAKE_UPDATE_ARG: ${{ inputs.flake_update_arg }}
+        run: |
+          # Word-split the operator's argument instead of interpolating it into the shell
+          read -r -a UPDATE_ARGS <<< "$FLAKE_UPDATE_ARG"
+          nix flake update "${UPDATE_ARGS[@]}"
+          git --no-pager diff --stat flake.lock
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add flake.lock
+            git commit -m "chore(flake): update inputs"
+            git push
+          else
+            echo "No changes detected. Skipping commit."
+          fi
